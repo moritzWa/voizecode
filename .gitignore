@@ -1,0 +1,26 @@
+node_modules/
+.next/
+out/
+*.log
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets / local env (keep .env.example committed)
+.env
+.env.local
+.env.*.local
+relay/.env
+client/.env.local
+
+# generated VAD / onnxruntime-web assets (recreated by `client` postinstall)
+client/public/*.onnx
+client/public/*.wasm
+client/public/ort-wasm*.mjs
+client/public/vad.worklet.bundle.min.js
+
+# test recordings + Playwright MCP scratch output
+test/artifacts/
+.playwright-mcp/
+laptop/package-lock.json
+
+.DS_Store
