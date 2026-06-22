@@ -17,7 +17,11 @@ const TTS_SR = 24000;
 // VOIZE_TTS=deepgram falls back to a single whole-mp3 blob (no progressive streaming).
 const TTS_PROVIDER = (Deno.env.get("VOIZE_TTS") ?? "openai").toLowerCase();
 const TTS_VOICE = Deno.env.get("VOIZE_TTS_VOICE") ?? "aura-2-thalia-en";
-const UTTER_GAP_MS = Number(Deno.env.get("VOIZE_UTTER_GAP_MS") ?? 1600);
+const UTTER_GAP_MS = Number(Deno.env.get("VOIZE_UTTER_GAP_MS") ?? 2200);
+// Spoken tool updates are throttled so a busy turn doesn't chatter — the first
+// meaningful action each turn always speaks. Which tools are "meaningful" is decided
+// by the laptop (it has the full command) and arrives as the `speak` flag.
+const TOOL_SPEAK_THROTTLE_MS = Number(Deno.env.get("VOIZE_TOOL_SPEAK_THROTTLE_MS") ?? 6000);
 
 interface Session {
   id: string;
@@ -28,14 +32,16 @@ interface Session {
   dgQueue: Uint8Array[];
   utter: string;
   utterTimer?: number;
+  lastToolSpeakAt: number; // throttle spoken tool-call updates
 }
 const sessions = new Map<string, Session>();
 let client: WebSocket | null = null;
 let narration: "narrate" | "final-only" | "silent" = "narrate";
+let ttsVoice = (Deno.env.get("VOIZE_VOICE") ?? "alloy").toLowerCase(); // OpenAI TTS voice, set from the client
 
 function getSession(id: string): Session {
   let s = sessions.get(id);
-  if (!s) { s = { id, label: id, model: "?", agent: null, dg: null, dgQueue: [], utter: "" }; sessions.set(id, s); }
+  if (!s) { s = { id, label: id, model: "?", agent: null, dg: null, dgQueue: [], utter: "", lastToolSpeakAt: 0 }; sessions.set(id, s); }
   return s;
 }
 
@@ -96,6 +102,11 @@ function deliverUtterance(s: Session) {
 }
 function deliverUserTurn(s: Session, text: string) {
   console.log(`[relay:${s.id}] user:`, text);
+  s.lastToolSpeakAt = 0; // let the first meaningful tool call this turn speak
+  // A new turn supersedes whatever was in flight: interrupt claude + stop its audio first.
+  // (Idempotent — a no-op if claude is idle.) Fixes a split/follow-up answering the stale turn.
+  toAgent(s, { t: "interrupt" });
+  toClient(s.id, { t: "stop_audio" });
   toClient(s.id, { t: "user_echo", text, seq: nextSeq() });
   toAgent(s, { t: "user_message", text });
   toClient(s.id, { t: "thinking", on: true });
@@ -128,7 +139,7 @@ async function speak(s: Session, text: string) {
     const r = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "tts-1", voice: "alloy", input: text, response_format: "mp3" }),
+      body: JSON.stringify({ model: "tts-1", voice: ttsVoice, input: text, response_format: "mp3" }),
     });
     if (!r.ok || !r.body) throw new Error(`openai tts ${r.status}`);
     const reader = r.body.getReader();
@@ -159,10 +170,13 @@ async function speak(s: Session, text: string) {
 }
 
 const NARRATE_SYSTEM =
-  "You are the voice of a coding agent, speaking directly to the developer who is walking and listening. " +
-  "Rewrite the agent's reply below as a brief first-person spoken update — say 'I' for the agent, 'you' for the developer. " +
-  "1-3 sentences, plain spoken English, no code, no markdown, no file paths or contents. " +
-  "Say what you did and what you need from them, if anything. Do not greet or address the agent.";
+  "You are the voice of a coding agent, speaking to a developer who is LISTENING (not reading). " +
+  "Convey the SUBSTANCE of the agent's reply below as natural spoken English, first person ('I', 'you'). " +
+  "If it answers a question or explains something, actually SAY that information, condensed to the key points. " +
+  "If it describes work done, say concretely what changed and any result. " +
+  "Be concise but complete — usually 2 to 5 sentences; longer only if the answer truly needs it. " +
+  "Never give meta filler like 'I checked the structure' or 'I have a good understanding' instead of the real content. " +
+  "No code, no markdown, no file paths or raw file contents. Do not greet or address the agent.";
 
 function takeSentences(b: string): { done: string[]; rest: string } {
   const done: string[] = [];
@@ -181,7 +195,7 @@ async function narrateFinal(s: Session, fullText: string) {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: NARRATE_MODEL, max_tokens: 300, stream: true,
+        model: NARRATE_MODEL, max_tokens: 400, stream: true,
         messages: [{ role: "system", content: NARRATE_SYSTEM }, { role: "user", content: fullText.slice(0, 6000) }],
       }),
     });
@@ -224,9 +238,15 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
       broadcastSessions();
       break;
     case "delta": toClient(s.id, { t: "agent_text", text: m.text as string, seq: nextSeq() }); break;
-    case "tool_use":
-      if (narration === "narrate") { toClient(s.id, { t: "status", text: m.summary as string, seq: nextSeq() }); speak(s, m.summary as string); }
+    case "tool_use": { // always show as a text line; speak only high-signal, throttled
+      toClient(s.id, { t: "status", text: m.summary as string, seq: nextSeq() });
+      const now = Date.now();
+      if (narration === "narrate" && m.speak === true && now - s.lastToolSpeakAt > TOOL_SPEAK_THROTTLE_MS) {
+        s.lastToolSpeakAt = now;
+        speak(s, m.summary as string);
+      }
       break;
+    }
     case "turn_end": narrateFinal(s, (m.fullText as string) ?? ""); break;
     case "exit": console.log(`[relay:${s.id}] agent exited`, m.code); break;
   }
@@ -235,6 +255,7 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
 function handleClient(m: Record<string, unknown>) {
   if (m.t === "hello") { replay(typeof m.since === "number" ? m.since : 0); broadcastSessions(); return; }
   if (m.t === "set_narration") { narration = m.mode as typeof narration; return; }
+  if (m.t === "set_voice") { ttsVoice = String(m.voice).toLowerCase(); console.log("[relay] voice ->", ttsVoice); return; }
   const s = m.sessionId ? sessions.get(m.sessionId as string) : undefined;
   if (!s) return;
   switch (m.t) {
@@ -242,6 +263,7 @@ function handleClient(m: Record<string, unknown>) {
     case "text": deliverUserTurn(s, m.text as string); break;
     case "barge_in": toClient(s.id, { t: "stop_audio" }); toAgent(s, { t: "interrupt" }); break;
     case "set_model": toAgent(s, { t: "set_model", model: m.model }); break;
+    case "reset": toClient(s.id, { t: "stop_audio" }); toAgent(s, { t: "reset" }); break;
   }
 }
 function replay(since: number) {

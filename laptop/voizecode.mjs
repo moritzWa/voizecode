@@ -60,6 +60,16 @@ function switchModel(next) {
   announceModel();
 }
 
+// New chat: respawn claude so it starts with a fresh, empty context.
+function resetSession() {
+  console.log("[voizecode] reset session (fresh claude context)");
+  const old = claude;
+  startClaude();
+  old?.stdin.end();
+  old?.kill("SIGINT");
+  announceModel();
+}
+
 const pushTurn = (text) =>
   claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
 const interrupt = () =>
@@ -93,6 +103,7 @@ function connect() {
     if (m.t === "user_message") { console.log("[voizecode] << user:", m.text); pushTurn(m.text); }
     else if (m.t === "interrupt") { console.log("[voizecode] << interrupt"); interrupt(); }
     else if (m.t === "set_model") { switchModel(m.model); }
+    else if (m.t === "reset") { resetSession(); }
   });
   sock.on("close", () => {
     clearTimers();
@@ -124,7 +135,7 @@ function handle(m) {
     send({ t: "delta", text: m.event.delta.text });
   } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
     for (const block of m.message.content) {
-      if (block.type === "tool_use") send({ t: "tool_use", name: block.name, summary: toolSummary(block) });
+      if (block.type === "tool_use") send({ t: "tool_use", name: block.name, summary: toolSummary(block), speak: toolSpeakable(block) });
     }
   } else if (m.type === "result") {
     send({ t: "turn_end", fullText: turnText.trim() });
@@ -143,6 +154,19 @@ function toolSummary(block) {
   }
 }
 const short = (p) => (p ? String(p).split("/").slice(-1)[0] : "");
+
+// Read-only shell commands that are just navigation/inspection — not worth speaking aloud.
+const READONLY_BASH = new Set(["ls", "find", "cat", "grep", "rg", "fd", "head", "tail", "wc", "pwd",
+  "echo", "which", "tree", "stat", "du", "df", "env", "sed", "awk", "cd", "git"]);
+// Whether a tool call is "high-signal" enough to speak (reveals what the agent is doing/changing).
+function toolSpeakable(block) {
+  const i = block.input || {};
+  switch (block.name) {
+    case "Edit": case "Write": case "NotebookEdit": case "Task": case "WebSearch": case "WebFetch": return true;
+    case "Bash": return !READONLY_BASH.has(String(i.command || "").trim().split(/\s+/)[0]);
+    default: return false; // Read, Grep, Glob, etc. -> text status only
+  }
+}
 
 startClaude();
 connect();

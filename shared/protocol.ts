@@ -22,6 +22,8 @@ export type ClientToRelay =
   | { t: "text"; sessionId: string; text: string } // typed input fallback
   | { t: "set_narration"; mode: NarrationMode }
   | { t: "set_model"; sessionId: string; model: ClaudeModel }
+  | { t: "set_voice"; voice: string }               // TTS voice (global)
+  | { t: "reset"; sessionId: string }               // new chat: clear UI + fresh claude context
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
 // ---- agent (laptop) -> relay ----
@@ -29,7 +31,7 @@ export type AgentToRelay =
   | { t: "hello"; role: "agent"; sessionId: string; label: string }
   | { t: "init"; sessionId: string; model: string }
   | { t: "delta"; text: string }                   // claude assistant text delta
-  | { t: "tool_use"; name: string; summary: string } // a tool call started (for status narration)
+  | { t: "tool_use"; name: string; summary: string; speak: boolean } // tool call started; speak=worth voicing
   | { t: "turn_end"; fullText: string }            // assistant turn finished; fullText = whole reply
   | { t: "exit"; code: number }
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
@@ -58,6 +60,7 @@ export type RelayToAgent =
   | { t: "user_message"; text: string } // deliver a (spoken or typed) user turn to claude
   | { t: "interrupt" }                  // stop claude mid-turn
   | { t: "set_model"; model: ClaudeModel }
+  | { t: "reset" }                      // respawn claude = fresh context
   | { t: "pong" };                      // heartbeat reply
 
 export type NarrationMode = "narrate" | "final-only" | "silent";
