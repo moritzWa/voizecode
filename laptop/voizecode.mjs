@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// voizecode — laptop side. Spawns a persistent `claude` stream-json session in
-// the current repo and bridges it to the relay over WebSocket.
+// voizecode — laptop side. Hosts one or more "chats", each a persistent `claude`
+// stream-json session bridged to the relay over its OWN WebSocket. Because the relay
+// treats one session per socket, N chats = N sockets and no per-message routing is needed.
 //
-//   client (mic) -> relay (STT) --user_message--> THIS --> claude stdin
-//   claude stdout --delta/tool_use/turn_end--> THIS --> relay (narrate+TTS) -> client
+//   client (mic) -> relay (STT) --user_message--> chat --> claude stdin
+//   claude stdout --delta/tool_use/turn_end--> chat --> relay (narrate+TTS) -> client
 //
-// Validated mechanisms: persistent multi-turn input + mid-turn interrupt.
-// Model switching restarts the claude process (fresh session).
+// New chat: the UI asks the relay, which forwards `new_chat` to an existing chat's socket;
+// this process then spins up a sibling chat (new socket + claude). Model switch / reset
+// respawn that chat's claude (fresh context).
 
 import { spawn } from "node:child_process";
 import process from "node:process";
@@ -14,8 +16,10 @@ import { basename } from "node:path";
 import WebSocket from "ws";
 
 const RELAY_URL = process.env.VOIZE_RELAY_URL || "ws://localhost:8787";
-let model = process.env.VOIZE_MODEL || "sonnet";
-const SESSION_ID = process.env.VOIZE_SESSION || basename(process.cwd()); // repo name = session id
+const DEFAULT_MODEL = process.env.VOIZE_MODEL || "sonnet";
+const RECONNECT_CAP_MS = Number(process.env.VOIZE_RECONNECT_CAP_MS) || 15000;
+const REPO = process.env.VOIZE_SESSION || basename(process.cwd());
+
 const claudeArgs = (m) => [
   "-p",
   "--input-format", "stream-json",
@@ -26,123 +30,103 @@ const claudeArgs = (m) => [
   "--model", m,
 ];
 
-// ---- restartable claude child ----
-let claude = null;
-let buf = "";
-let turnText = "";
+// One self-contained chat: its own claude process + its own relay websocket.
+function startChat(sessionId, label, initialModel) {
+  let model = initialModel;
+  let claude = null, buf = "", turnText = "";
+  let ws = null, hbTimer = null, wdTimer = null, retry = 0;
 
-function startClaude() {
-  const child = spawn("claude", claudeArgs(model), { stdio: ["pipe", "pipe", "inherit"] });
-  claude = child;
-  console.log(`[voizecode] spawned claude (${model}) in ${process.cwd()}`);
-  buf = ""; turnText = "";
-  child.stdout.on("data", (d) => { if (child === claude) onStdout(d); }); // ignore stragglers from replaced procs
-  child.on("exit", (c) => {
-    if (child !== claude) return; // a replaced (old) process exited during a switch — expected
-    console.log("[voizecode] claude exited", c);
-    send({ t: "exit", code: c ?? 0 });
-    process.exit(c ?? 0);
-  });
-}
+  const send = (m) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ ...m, sessionId }));
+  const announce = () => send({ t: "init", sessionId, model, label });
 
-// Tell the relay which model is active now (claude is lazy and won't emit its own
-// init until the next turn, so the UI would otherwise lag a switch).
-const announceModel = () => send({ t: "init", sessionId: "local", model });
-
-function switchModel(next) {
-  if (next === model || !["haiku", "sonnet", "opus"].includes(next)) return;
-  console.log(`[voizecode] switching model ${model} -> ${next}`);
-  model = next;
-  const old = claude;
-  startClaude();          // claude now points to the new process; sends a fresh init
-  old?.stdin.end();
-  old?.kill("SIGINT");    // its exit handler no-ops (child !== claude)
-  announceModel();
-}
-
-// New chat: respawn claude so it starts with a fresh, empty context.
-function resetSession() {
-  console.log("[voizecode] reset session (fresh claude context)");
-  const old = claude;
-  startClaude();
-  old?.stdin.end();
-  old?.kill("SIGINT");
-  announceModel();
-}
-
-const pushTurn = (text) =>
-  claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
-const interrupt = () =>
-  claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
-
-// ---- relay connection (auto-reconnect w/ heartbeat + backoff) ----
-let ws = null;
-let hbTimer = null;   // heartbeat ping interval
-let wdTimer = null;   // silence watchdog
-let retry = 0;        // backoff attempt count
-const send = (m) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify(m));
-
-function connect() {
-  const sock = new WebSocket(RELAY_URL);
-  ws = sock;
-  const clearTimers = () => { if (hbTimer) clearInterval(hbTimer); if (wdTimer) clearTimeout(wdTimer); };
-  // No inbound for 25s -> assume a half-open socket (network change) and force a reconnect.
-  const armWatchdog = () => { if (wdTimer) clearTimeout(wdTimer); wdTimer = setTimeout(() => { try { sock.terminate(); } catch { /* gone */ } }, 25000); };
-  sock.on("open", () => {
-    retry = 0;
-    console.log(`[voizecode] relay connected (session: ${SESSION_ID})`);
-    send({ t: "hello", role: "agent", sessionId: SESSION_ID, label: SESSION_ID });
-    announceModel();
-    hbTimer = setInterval(() => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: "ping" })); }, 10000);
-    armWatchdog();
-  });
-  sock.on("message", (raw) => {
-    armWatchdog();
-    let m; try { m = JSON.parse(raw.toString()); } catch { return; }
-    if (m.t === "pong") return;
-    if (m.t === "user_message") { console.log("[voizecode] << user:", m.text); pushTurn(m.text); }
-    else if (m.t === "interrupt") { console.log("[voizecode] << interrupt"); interrupt(); }
-    else if (m.t === "set_model") { switchModel(m.model); }
-    else if (m.t === "reset") { resetSession(); }
-  });
-  sock.on("close", () => {
-    clearTimers();
-    const delay = Math.min(1000 * 2 ** retry, Number(process.env.VOIZE_RECONNECT_CAP_MS) || 15000) + Math.random() * 500;
-    retry++;
-    console.log(`[voizecode] relay closed, retrying in ${Math.round(delay)}ms`);
-    setTimeout(connect, delay);
-  });
-  sock.on("error", (e) => console.log("[voizecode] relay error:", e.message));
-}
-
-// ---- parse claude stream-json -> relay events ----
-function onStdout(d) {
-  buf += d.toString();
-  let i;
-  while ((i = buf.indexOf("\n")) >= 0) {
-    const line = buf.slice(0, i); buf = buf.slice(i + 1);
-    if (!line.trim()) continue;
-    let m; try { m = JSON.parse(line); } catch { continue; }
-    handle(m);
+  function startClaude() {
+    const child = spawn("claude", claudeArgs(model), { stdio: ["pipe", "pipe", "inherit"] });
+    claude = child; buf = ""; turnText = "";
+    console.log(`[${sessionId}] spawned claude (${model}) in ${process.cwd()}`);
+    child.stdout.on("data", (d) => { if (child === claude) onStdout(d); });
+    child.on("exit", (c) => { if (child === claude) { console.log(`[${sessionId}] claude exited`, c); send({ t: "exit", code: c ?? 0 }); } });
   }
-}
+  function switchModel(next) {
+    if (next === model || !["haiku", "sonnet", "opus"].includes(next)) return;
+    console.log(`[${sessionId}] model ${model} -> ${next}`);
+    model = next;
+    const old = claude; startClaude(); old?.stdin.end(); old?.kill("SIGINT");
+    announce();
+  }
+  function resetSession() {
+    console.log(`[${sessionId}] reset (fresh claude context)`);
+    const old = claude; startClaude(); old?.stdin.end(); old?.kill("SIGINT");
+    announce();
+  }
 
-function handle(m) {
-  if (m.type === "system" && m.subtype === "init") {
-    send({ t: "init", sessionId: m.session_id, model: m.model });
-  } else if (m.type === "stream_event" && m.event?.delta?.text) {
-    turnText += m.event.delta.text;
-    send({ t: "delta", text: m.event.delta.text });
-  } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
-    for (const block of m.message.content) {
-      if (block.type === "tool_use") send({ t: "tool_use", name: block.name, summary: toolSummary(block), speak: toolSpeakable(block) });
+  const pushTurn = (text) =>
+    claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
+  const interrupt = () =>
+    claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
+
+  function connect() {
+    const sock = new WebSocket(RELAY_URL);
+    ws = sock;
+    const clearTimers = () => { if (hbTimer) clearInterval(hbTimer); if (wdTimer) clearTimeout(wdTimer); };
+    const armWatchdog = () => { if (wdTimer) clearTimeout(wdTimer); wdTimer = setTimeout(() => { try { sock.terminate(); } catch { /* gone */ } }, 25000); };
+    sock.on("open", () => {
+      retry = 0;
+      console.log(`[${sessionId}] relay connected`);
+      send({ t: "hello", role: "agent", sessionId, label });
+      announce();
+      hbTimer = setInterval(() => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: "ping" })); }, 10000);
+      armWatchdog();
+    });
+    sock.on("message", (raw) => {
+      armWatchdog();
+      let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+      if (m.t === "pong") return;
+      if (m.t === "user_message") { console.log(`[${sessionId}] << user:`, m.text); pushTurn(m.text); }
+      else if (m.t === "interrupt") { interrupt(); }
+      else if (m.t === "set_model") { switchModel(m.model); }
+      else if (m.t === "reset") { resetSession(); }
+      else if (m.t === "new_chat") { createChat(); } // spawn a sibling chat
+    });
+    sock.on("close", () => {
+      clearTimers();
+      const delay = Math.min(1000 * 2 ** retry, RECONNECT_CAP_MS) + Math.random() * 500;
+      retry++;
+      console.log(`[${sessionId}] relay closed, retrying in ${Math.round(delay)}ms`);
+      setTimeout(connect, delay);
+    });
+    sock.on("error", (e) => console.log(`[${sessionId}] relay error:`, e.message));
+  }
+
+  function onStdout(d) {
+    buf += d.toString();
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      if (!line.trim()) continue;
+      let m; try { m = JSON.parse(line); } catch { continue; }
+      handle(m);
     }
-  } else if (m.type === "result") {
-    send({ t: "turn_end", fullText: turnText.trim() });
-    turnText = "";
   }
+  function handle(m) {
+    if (m.type === "stream_event" && m.event?.delta?.text) {
+      turnText += m.event.delta.text;
+      send({ t: "delta", text: m.event.delta.text });
+    } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+      for (const block of m.message.content) {
+        if (block.type === "tool_use") send({ t: "tool_use", name: block.name, summary: toolSummary(block), speak: toolSpeakable(block) });
+      }
+    } else if (m.type === "result") {
+      send({ t: "turn_end", fullText: turnText.trim() });
+      turnText = "";
+    }
+  }
+
+  startClaude();
+  connect();
+  return { sessionId, kill: () => { try { claude?.kill("SIGINT"); } catch { /* noop */ } try { ws?.close(); } catch { /* noop */ } } };
 }
 
+// ---- tool summaries / speakability ----
 function toolSummary(block) {
   const i = block.input || {};
   switch (block.name) {
@@ -154,20 +138,26 @@ function toolSummary(block) {
   }
 }
 const short = (p) => (p ? String(p).split("/").slice(-1)[0] : "");
-
-// Read-only shell commands that are just navigation/inspection — not worth speaking aloud.
 const READONLY_BASH = new Set(["ls", "find", "cat", "grep", "rg", "fd", "head", "tail", "wc", "pwd",
   "echo", "which", "tree", "stat", "du", "df", "env", "sed", "awk", "cd", "git"]);
-// Whether a tool call is "high-signal" enough to speak (reveals what the agent is doing/changing).
 function toolSpeakable(block) {
   const i = block.input || {};
   switch (block.name) {
     case "Edit": case "Write": case "NotebookEdit": case "Task": case "WebSearch": case "WebFetch": return true;
     case "Bash": return !READONLY_BASH.has(String(i.command || "").trim().split(/\s+/)[0]);
-    default: return false; // Read, Grep, Glob, etc. -> text status only
+    default: return false;
   }
 }
 
-startClaude();
-connect();
-process.on("SIGINT", () => { claude?.kill("SIGINT"); process.exit(0); });
+// ---- chat registry ----
+const chats = [];
+let chatCounter = 0;
+function createChat() {
+  chatCounter++;
+  const sessionId = chatCounter === 1 ? REPO : `${REPO}#${chatCounter}`;
+  const label = chatCounter === 1 ? REPO : `${REPO} ${chatCounter}`;
+  chats.push(startChat(sessionId, label, DEFAULT_MODEL));
+}
+createChat(); // first chat
+
+process.on("SIGINT", () => { for (const c of chats) c.kill(); process.exit(0); });

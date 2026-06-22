@@ -232,6 +232,7 @@ async function narrateFinal(s: Session, fullText: string) {
 function handleAgent(s: Session, m: Record<string, unknown>) {
   switch (m.t) {
     case "init":
+      if (m.label) s.label = m.label as string;
       s.model = (m.model as string) ?? s.model;
       console.log(`[relay:${s.id}] model`, s.model);
       toClient(s.id, { t: "model", model: s.model });
@@ -264,6 +265,7 @@ function handleClient(m: Record<string, unknown>) {
     case "barge_in": toClient(s.id, { t: "stop_audio" }); toAgent(s, { t: "interrupt" }); break;
     case "set_model": toAgent(s, { t: "set_model", model: m.model }); break;
     case "reset": toClient(s.id, { t: "stop_audio" }); toAgent(s, { t: "reset" }); break;
+    case "new_session": toAgent(s, { t: "new_chat" }); break; // agent spawns a sibling chat -> new tab
   }
 }
 function replay(since: number) {

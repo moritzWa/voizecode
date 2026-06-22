@@ -29,7 +29,7 @@ export default function Home() {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold">voizecode</h1>
-          <button onClick={v.clearChat} title="New chat — clears history + resets context"
+          <button onClick={v.newSession} title="New chat in a separate tab"
             className="flex items-center gap-1 rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700">
             <Plus size={13} /> New chat
           </button>
@@ -62,6 +62,12 @@ export default function Home() {
             {v.unread[s.sessionId] && s.sessionId !== v.activeId && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
           </button>
         ))}
+        {v.sessions.length > 0 && (
+          <button onClick={v.newSession} title="New chat"
+            className="rounded-t-lg px-2.5 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100" aria-label="New chat">
+            <Plus size={15} />
+          </button>
+        )}
       </div>
 
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-3">

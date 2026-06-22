@@ -56,6 +56,8 @@ export function useVoize() {
   const hbTimer = useRef<ReturnType<typeof setInterval> | null>(null);  // heartbeat ping
   const wdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);   // silence watchdog
   const retry = useRef(0);                                              // backoff attempt count
+  const wantNew = useRef(false);                                        // auto-focus the next new session
+  const knownIds = useRef<Set<string>>(new Set());                      // sessions seen so far
   const activeRef = useRef(activeId);
   const rateRef = useRef(rate);
   const agentBuf = useRef<Record<string, string>>({});
@@ -152,10 +154,21 @@ export function useVoize() {
       const sid: string = m.sessionId;
       const isActive = sid === activeRef.current;
       switch (m.t) {
-        case "sessions":
+        case "sessions": {
+          const incoming: string[] = m.sessions.map((x: SessionInfo) => x.sessionId);
+          const fresh = incoming.filter((id) => !knownIds.current.has(id));
+          knownIds.current = new Set(incoming);
           setSessions(m.sessions);
-          setActiveId((cur) => cur || m.sessions[0]?.sessionId || "");
+          setActiveId((cur) => cur || incoming[0] || "");
+          if (wantNew.current && fresh.length) { // focus the chat we just created
+            wantNew.current = false;
+            const id = fresh[fresh.length - 1];
+            stopAudio();
+            setActiveId(id);
+            setUnread((p) => ({ ...p, [id]: false }));
+          }
           break;
+        }
         case "model": setSessions((p) => p.map((s) => s.sessionId === sid ? { ...s, model: normModel(m.model) } : s)); break;
         case "transcript": setInterim((p) => ({ ...p, [sid]: m.text })); break;
         case "user_echo": addLine(sid, { kind: "user", text: m.text }); setInterim((p) => ({ ...p, [sid]: "" })); break;
@@ -283,7 +296,9 @@ export function useVoize() {
     try { localStorage.setItem(MIC_KEY, id); } catch { /* quota */ }
     if (live) { stop(); setTimeout(() => start(), 150); } // re-acquire capture on the new device
   }, [live, stop, start]);
-  // New chat: stop audio, clear this session's transcript, and reset claude's context.
+  // New chat as a separate session/tab (the agent spawns a sibling claude); auto-focuses it.
+  const newSession = useCallback(() => { wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current }); }, []);
+  // Reset: clear this session's transcript + fresh claude context (same tab).
   const clearChat = useCallback(() => {
     stopAudio();
     const sid = activeRef.current;
@@ -299,6 +314,6 @@ export function useVoize() {
     lines: convos[activeId] || [], interim: interim[activeId] || "",
     thinking: !!thinking[activeId], model: active?.model || "sonnet",
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
-    voice, setVoice, clearChat, mics, micId, setMic, muted, toggleMute,
+    voice, setVoice, clearChat, newSession, mics, micId, setMic, muted, toggleMute,
   };
 }
