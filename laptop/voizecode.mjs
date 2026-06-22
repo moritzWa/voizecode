@@ -34,7 +34,7 @@ const claudeArgs = (m) => [
 function startChat(sessionId, label, initialModel) {
   let model = initialModel;
   let claude = null, buf = "", turnText = "";
-  let ws = null, hbTimer = null, wdTimer = null, retry = 0;
+  let ws = null, hbTimer = null, wdTimer = null, retry = 0, closed = false;
 
   const send = (m) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ ...m, sessionId }));
   const announce = () => send({ t: "init", sessionId, model, label });
@@ -86,8 +86,18 @@ function startChat(sessionId, label, initialModel) {
       else if (m.t === "set_model") { switchModel(m.model); }
       else if (m.t === "reset") { resetSession(); }
       else if (m.t === "new_chat") { createChat(); } // spawn a sibling chat
+      else if (m.t === "close") { // kill this chat for good (UI closed the tab)
+        closed = true;
+        clearTimers();
+        try { claude?.kill("SIGINT"); } catch { /* noop */ }
+        try { sock.close(); } catch { /* noop */ }
+        const i = chats.findIndex((c) => c.sessionId === sessionId);
+        if (i >= 0) chats.splice(i, 1);
+        console.log(`[${sessionId}] closed`);
+      }
     });
     sock.on("close", () => {
+      if (closed) return; // deliberate close -> don't reconnect
       clearTimers();
       const delay = Math.min(1000 * 2 ** retry, RECONNECT_CAP_MS) + Math.random() * 500;
       retry++;

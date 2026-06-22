@@ -25,6 +25,7 @@ export type ClientToRelay =
   | { t: "set_voice"; voice: string }               // TTS voice (global)
   | { t: "reset"; sessionId: string }               // clear UI + fresh claude context (same tab)
   | { t: "new_session"; sessionId: string }         // create a sibling chat on this session's agent
+  | { t: "close_session"; sessionId: string }       // close a chat (kills its claude subprocess)
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
 // ---- agent (laptop) -> relay ----
@@ -63,6 +64,7 @@ export type RelayToAgent =
   | { t: "set_model"; model: ClaudeModel }
   | { t: "reset" }                      // respawn claude = fresh context
   | { t: "new_chat" }                   // spawn a sibling chat on this agent
+  | { t: "close" }                      // kill this chat (claude + socket)
   | { t: "pong" };                      // heartbeat reply
 
 export type NarrationMode = "narrate" | "final-only" | "silent";

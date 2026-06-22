@@ -1,7 +1,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2 } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
 
 // Render an agent reply as markdown. Fenced code blocks scroll horizontally (no wrap, so
@@ -56,11 +56,19 @@ export default function Home() {
       <div className="flex gap-1 overflow-x-auto">
         {v.sessions.length === 0 && <span className="text-xs text-zinc-400">no sessions — start a laptop agent in a repo</span>}
         {v.sessions.map((s) => (
-          <button key={s.sessionId} onClick={() => v.switchSession(s.sessionId)}
-            className={`flex items-center gap-1.5 rounded-t-lg px-3 py-1.5 text-sm ${s.sessionId === v.activeId ? "bg-white font-medium" : "bg-zinc-200 text-zinc-600"}`}>
-            {s.label}
-            {v.unread[s.sessionId] && s.sessionId !== v.activeId && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
-          </button>
+          <div key={s.sessionId}
+            className={`flex items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 text-sm ${s.sessionId === v.activeId ? "bg-white font-medium" : "bg-zinc-200 text-zinc-600"}`}>
+            <button onClick={() => v.switchSession(s.sessionId)} className="flex items-center gap-1.5 py-1.5">
+              {s.label}
+              {v.unread[s.sessionId] && s.sessionId !== v.activeId && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
+            </button>
+            {v.sessions.length > 1 && (
+              <button onClick={() => v.closeSession(s.sessionId)} title="Close chat (ends its claude)"
+                className="rounded p-0.5 text-zinc-400 hover:bg-zinc-300 hover:text-zinc-700" aria-label="Close chat">
+                <X size={13} />
+              </button>
+            )}
+          </div>
         ))}
         {v.sessions.length > 0 && (
           <button onClick={v.newSession} title="New chat"

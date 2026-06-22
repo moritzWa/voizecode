@@ -266,6 +266,12 @@ function handleClient(m: Record<string, unknown>) {
     case "set_model": toAgent(s, { t: "set_model", model: m.model }); break;
     case "reset": toClient(s.id, { t: "stop_audio" }); toAgent(s, { t: "reset" }); break;
     case "new_session": toAgent(s, { t: "new_chat" }); break; // agent spawns a sibling chat -> new tab
+    case "close_session": // tell the agent to kill that chat, drop the session, remove the tab
+      toAgent(s, { t: "close" });
+      s.dg?.close();
+      sessions.delete(s.id);
+      broadcastSessions();
+      break;
   }
 }
 function replay(since: number) {

@@ -33,10 +33,17 @@ export class ClipPlayer {
   private current: Clip | null = null;
   private rate = 1;
   private speaking = false;
+  private paused = false;
   constructor(private onSpeaking?: SpeakingCb) {}
 
   isPlaying() { return !!this.current; }
+  isPaused() { return this.paused; }
   setRate(r: number) { this.rate = r; if (this.current) this.current.audio.playbackRate = r; }
+
+  // Pause/resume the current utterance without tearing down the queue (for VAD ducking:
+  // pause on possible speech, resume if it turns out to be noise).
+  pause() { if (this.current && !this.paused) { this.paused = true; try { this.current.audio.pause(); } catch { /* noop */ } } }
+  resume() { if (this.paused) { this.paused = false; if (this.current) this.current.audio.play().catch(() => {}); } }
 
   pushChunk(id: number, bytes: Uint8Array) {
     const clip = this.ensure(id);
@@ -62,6 +69,7 @@ export class ClipPlayer {
     for (const id of this.order) this.teardown(this.building.get(id));
     if (this.current) this.teardown(this.current);
     this.building.clear(); this.order = []; this.current = null;
+    this.paused = false;
     this.emit(false);
   }
 
@@ -119,6 +127,7 @@ export class ClipPlayer {
   }
 
   private play(clip: Clip) {
+    if (this.paused) return; // resume() will start it
     clip.audio.playbackRate = this.rate;
     clip.audio.play().then(() => this.emit(true)).catch(() => this.onEnded(clip));
   }

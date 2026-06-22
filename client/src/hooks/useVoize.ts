@@ -65,6 +65,9 @@ export function useVoize() {
   const proc = useRef<ScriptProcessorNode | null>(null);
   const stream = useRef<MediaStream | null>(null);
   const vad = useRef<{ destroy: () => void } | null>(null);
+  const vadPending = useRef(false);                 // VAD ducked audio, awaiting transcript confirmation
+  const vadHadTranscript = useRef(false);           // a real transcript arrived during this VAD onset
+  const vadResumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const player = useRef<ClipPlayer | null>(null);
   const tone = useRef<ThinkingTone | null>(null);
   const pending = useRef<Record<string, HeldEvent[]>>({}); // audio held for unfocused sessions
@@ -111,7 +114,11 @@ export function useVoize() {
     tone.current = new ThinkingTone();
     return () => { player.current?.stop(); tone.current?.stop(); };
   }, []);
-  const stopAudio = useCallback(() => { player.current?.stop(); tone.current?.stop(); markSpeaking(false); }, []);
+  const stopAudio = useCallback(() => {
+    player.current?.stop(); tone.current?.stop(); markSpeaking(false);
+    vadPending.current = false;
+    if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current);
+  }, []);
 
   // Ambient "thinking" tone while the active session is working (stops before the spoken reply).
   useEffect(() => { if (thinking[activeId]) tone.current?.start(); else tone.current?.stop(); }, [thinking, activeId]);
@@ -170,7 +177,17 @@ export function useVoize() {
           break;
         }
         case "model": setSessions((p) => p.map((s) => s.sessionId === sid ? { ...s, model: normModel(m.model) } : s)); break;
-        case "transcript": setInterim((p) => ({ ...p, [sid]: m.text })); break;
+        case "transcript":
+          setInterim((p) => ({ ...p, [sid]: m.text }));
+          // Real words confirm a VAD onset -> commit the barge-in (stop agent audio + interrupt claude).
+          if (vadPending.current && isActive && m.text?.trim()) {
+            vadPending.current = false;
+            vadHadTranscript.current = true;
+            if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current);
+            send({ t: "barge_in", sessionId: activeRef.current });
+            stopAudio();
+          }
+          break;
         case "user_echo": addLine(sid, { kind: "user", text: m.text }); setInterim((p) => ({ ...p, [sid]: "" })); break;
         case "agent_text": agentBuf.current[sid] = (agentBuf.current[sid] || "") + m.text; break;
         case "status": flushAgent(sid); addLine(sid, { kind: "status", text: m.text }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
@@ -260,12 +277,34 @@ export function useVoize() {
     src.connect(node); node.connect(ctx.destination);
     setLive(true);
 
-    // Silero VAD: real barge-in (talk over the agent -> stop audio + interrupt claude)
+    // Silero VAD, two-phase barge-in:
+    //  - onSpeechStart: just PAUSE (duck) the agent's audio — don't interrupt yet.
+    //  - a real Deepgram transcript (handled in the ws "transcript" case) CONFIRMS it:
+    //    stop audio + interrupt claude.
+    //  - onSpeechEnd with no transcript = it was noise -> RESUME where it left off.
+    // Thresholds raised so transient noises (a bottle cap) don't trip onSpeechStart.
     try {
       const { MicVAD } = await import("@ricky0123/vad-web");
       vad.current = await MicVAD.new({
         baseAssetPath: "/", onnxWASMBasePath: "/", // assets served from client/public
-        onSpeechStart: () => { if (!mutedRef.current && player.current?.isPlaying()) { send({ t: "barge_in", sessionId: activeRef.current }); stopAudio(); } },
+        positiveSpeechThreshold: 0.7,  // need higher confidence (default 0.5)
+        minSpeechMs: 200,              // require sustained speech, not a transient
+        redemptionMs: 320,
+        onSpeechStart: () => {
+          if (mutedRef.current || !player.current?.isPlaying()) return;
+          vadPending.current = true;
+          vadHadTranscript.current = false;
+          if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current);
+          player.current.pause(); // duck immediately, reversibly
+        },
+        onSpeechEnd: () => {
+          if (!vadPending.current) return;
+          // give Deepgram a beat to deliver a transcript; if none arrives it was noise -> resume
+          if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current);
+          vadResumeTimer.current = setTimeout(() => {
+            if (vadPending.current && !vadHadTranscript.current) { vadPending.current = false; player.current?.resume(); }
+          }, 1000);
+        },
       });
       (vad.current as unknown as { start: () => void }).start();
     } catch (e) { console.warn("VAD unavailable, barge-in disabled", e); }
@@ -298,6 +337,19 @@ export function useVoize() {
   }, [live, stop, start]);
   // New chat as a separate session/tab (the agent spawns a sibling claude); auto-focuses it.
   const newSession = useCallback(() => { wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current }); }, []);
+  // Close a chat: kill its claude subprocess + drop the tab. Switches away if it was active.
+  const closeSession = useCallback((sid: string) => {
+    send({ t: "close_session", sessionId: sid });
+    knownIds.current.delete(sid);
+    pending.current[sid] = [];
+    setConvos((p) => { const n = { ...p }; delete n[sid]; return n; });
+    setActiveId((cur) => {
+      if (cur !== sid) return cur;
+      if (cur === activeRef.current) stopAudio();
+      const next = sessions.find((s) => s.sessionId !== sid);
+      return next?.sessionId || "";
+    });
+  }, [sessions, stopAudio]);
   // Reset: clear this session's transcript + fresh claude context (same tab).
   const clearChat = useCallback(() => {
     stopAudio();
@@ -314,6 +366,6 @@ export function useVoize() {
     lines: convos[activeId] || [], interim: interim[activeId] || "",
     thinking: !!thinking[activeId], model: active?.model || "sonnet",
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
-    voice, setVoice, clearChat, newSession, mics, micId, setMic, muted, toggleMute,
+    voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute,
   };
 }
