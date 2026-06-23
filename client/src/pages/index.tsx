@@ -3,18 +3,25 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const MIC_DEFAULT = "__default__";
 
 // Render an agent reply as markdown. Fenced code blocks scroll horizontally (no wrap, so
 // ASCII diagrams stay aligned on a narrow phone); prose, lists, headings render readably.
 function AgentMessage({ text }: { text: string }) {
   return (
-    <div className="rounded-lg bg-zinc-50 px-3 py-2 text-xs leading-relaxed text-zinc-700 break-words dark:bg-zinc-800 dark:text-zinc-200
+    <div className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-foreground break-words
       [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0
       [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5
       [&_h1]:mb-1 [&_h1]:mt-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mb-1 [&_h2]:mt-2 [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:font-semibold
       [&_strong]:font-semibold [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline
-      [&_pre]:my-1 [&_pre]:overflow-x-auto [&_pre]:whitespace-pre [&_pre]:rounded [&_pre]:bg-zinc-100 [&_pre]:p-2 [&_pre]:font-mono dark:[&_pre]:bg-zinc-900
-      [&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-zinc-200 [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:font-mono dark:[&_:not(pre)>code]:bg-zinc-700">
+      [&_pre]:my-1 [&_pre]:overflow-x-auto [&_pre]:whitespace-pre [&_pre]:rounded [&_pre]:bg-background [&_pre]:p-2 [&_pre]:font-mono [&_pre]:border
+      [&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-background [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:font-mono">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </div>
   );
@@ -29,115 +36,109 @@ export default function Home() {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold">voizecode</h1>
-          <button onClick={v.newSession} title="New chat in a separate tab"
-            className="flex items-center gap-1 rounded-md bg-zinc-800 px-2.5 py-1 text-xs font-medium text-white hover:bg-zinc-700 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-zinc-300">
+          <Button size="sm" onClick={v.newSession} title="New chat in a separate tab">
             <Plus size={13} /> New chat
-          </button>
+          </Button>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-          <select value={v.model} onChange={(e) => v.setModel(e.target.value)}
-            className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
-            <option value="haiku">haiku</option>
-            <option value="sonnet">sonnet</option>
-            <option value="opus">opus</option>
-          </select>
-          <select value={v.voice} onChange={(e) => v.setVoice(e.target.value)} title="voice"
-            className="rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
-            {VOICES.map((vo) => <option key={vo.id} value={vo.id}>{vo.label}</option>)}
-          </select>
-          <span className={v.connected ? "text-green-600 dark:text-green-400" : "text-red-500"}>
+        <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+          <Select value={v.model} onValueChange={v.setModel}>
+            <SelectTrigger className="w-[88px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="haiku">haiku</SelectItem>
+              <SelectItem value="sonnet">sonnet</SelectItem>
+              <SelectItem value="opus">opus</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={v.voice} onValueChange={v.setVoice}>
+            <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <span className={v.connected ? "text-green-600 dark:text-green-400" : "text-destructive"}>
             {v.connected ? "connected" : "connecting…"}
           </span>
-          {v.thinking && <span className="flex items-center gap-1 text-blue-600"><Loader2 size={13} className="animate-spin" /> working…</span>}
+          {v.thinking && <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400"><Loader2 size={13} className="animate-spin" /> working…</span>}
         </div>
       </header>
 
       {/* session tabs */}
       <div className="flex gap-1 overflow-x-auto">
-        {v.sessions.length === 0 && <span className="text-xs text-zinc-400">no sessions — start a laptop agent in a repo</span>}
+        {v.sessions.length === 0 && <span className="text-xs text-muted-foreground">no sessions — start a laptop agent in a repo</span>}
         {v.sessions.map((s) => (
           <div key={s.sessionId}
-            className={`flex items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 text-sm ${s.sessionId === v.activeId ? "bg-white font-medium dark:bg-zinc-900" : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"}`}>
+            className={cn("flex items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 text-sm",
+              s.sessionId === v.activeId ? "bg-card font-medium" : "bg-muted text-muted-foreground")}>
             <button onClick={() => v.switchSession(s.sessionId)} className="flex items-center gap-1.5 py-1.5">
               {s.label}
               {v.unread[s.sessionId] && s.sessionId !== v.activeId && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
             </button>
             {v.sessions.length > 1 && (
-              <button onClick={() => v.closeSession(s.sessionId)} title="Close chat (ends its claude)"
-                className="rounded p-0.5 text-zinc-400 hover:bg-zinc-300 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-200" aria-label="Close chat">
+              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => v.closeSession(s.sessionId)} title="Close chat (ends its claude)" aria-label="Close chat">
                 <X size={13} />
-              </button>
+              </Button>
             )}
           </div>
         ))}
         {v.sessions.length > 0 && (
-          <button onClick={v.newSession} title="New chat"
-            className="rounded-t-lg px-2.5 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800" aria-label="New chat">
+          <Button variant="ghost" size="icon" className="h-8 rounded-t-lg" onClick={v.newSession} title="New chat" aria-label="New chat">
             <Plus size={15} />
-          </button>
+          </Button>
         )}
       </div>
 
-      <div className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-lg border bg-card p-3">
         {v.lines.map((l, i) => (
           l.kind === "agent" ? <AgentMessage key={i} text={l.text} /> :
-          <div key={i} className={
-            l.kind === "user" ? "self-end break-words rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white" :
-            l.kind === "speech" ? `break-words rounded-lg px-3 py-1.5 text-sm transition-colors ${l.clip != null && l.clip === v.speakingClip ? "bg-blue-100 ring-1 ring-blue-300 dark:bg-blue-900/50 dark:ring-blue-700" : "bg-zinc-100 dark:bg-zinc-800"}` :
-            "break-words px-1 text-xs italic text-zinc-400"
-          }>{l.text}</div>
+          <div key={i} className={cn("break-words",
+            l.kind === "user" ? "self-end rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground" :
+            l.kind === "speech" ? cn("rounded-lg px-3 py-1.5 text-sm transition-colors",
+              l.clip != null && l.clip === v.speakingClip ? "bg-accent ring-1 ring-primary/40" : "bg-muted") :
+            "px-1 text-xs italic text-muted-foreground")}>{l.text}</div>
         ))}
-        {v.interim && <div className="self-end px-3 text-sm text-zinc-400">{v.interim}…</div>}
+        {v.interim && <div className="self-end px-3 text-sm text-muted-foreground">{v.interim}…</div>}
       </div>
 
-      <div className="flex items-center gap-2 text-xs text-zinc-500">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <label className="whitespace-nowrap">speed {v.rate.toFixed(1)}x</label>
-        <input type="range" min={1} max={3} step={0.1} value={v.rate}
-          onChange={(e) => v.setRate(Number(e.target.value))} className="flex-1" />
+        <Slider min={1} max={3} step={0.1} value={[v.rate]} onValueChange={([r]) => v.setRate(r)} className="flex-1" />
       </div>
 
       {v.mics.length > 0 && (
-        <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Mic size={14} className="shrink-0" />
-          <select value={v.micId} onChange={(e) => v.setMic(e.target.value)}
-            className="flex-1 rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100">
-            <option value="">Default</option>
-            {v.mics.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-          </select>
+          <Select value={v.micId || MIC_DEFAULT} onValueChange={(val) => v.setMic(val === MIC_DEFAULT ? "" : val)}>
+            <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={MIC_DEFAULT}>Default mic</SelectItem>
+              {v.mics.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       )}
 
-      {v.micError && <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-950 dark:text-red-300">{v.micError}</div>}
+      {v.micError && <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{v.micError}</div>}
 
       {!v.live ? (
-        <button onClick={v.start}
-          className="flex items-center justify-center gap-2 rounded-lg bg-green-600 py-3 text-sm font-medium text-white hover:bg-green-700">
+        <Button variant="success" size="xl" onClick={v.start}>
           <Mic size={18} /> Start call
-        </button>
+        </Button>
       ) : (
         <div className="flex flex-col gap-2">
           {/* large primary mute toggle — silence ambient talk without ending the call */}
-          <button onClick={v.toggleMute}
-            className={`flex items-center justify-center gap-2 rounded-lg py-4 text-base font-semibold text-white ${v.muted ? "bg-red-600 hover:bg-red-700" : "bg-zinc-700 hover:bg-zinc-800"}`}>
+          <Button size="xl" variant={v.muted ? "destructive" : "secondary"} className="text-base font-semibold" onClick={v.toggleMute}>
             {v.muted ? <><MicOff size={22} /> Muted — tap to talk</> : <><Mic size={22} /> Mute mic</>}
-          </button>
+          </Button>
           <div className="flex gap-2">
-            <button onClick={v.stop} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-zinc-200 py-2 text-sm hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-600">
-              <Square size={15} /> Stop
-            </button>
-            <button onClick={v.interruptNow} className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-amber-500 py-2 text-sm font-medium text-white hover:bg-amber-600">
-              <Hand size={15} /> Interrupt
-            </button>
+            <Button variant="secondary" className="flex-1" onClick={v.stop}><Square size={15} /> Stop</Button>
+            <Button className="flex-1 bg-amber-500 text-white hover:bg-amber-600" onClick={v.interruptNow}><Hand size={15} /> Interrupt</Button>
           </div>
         </div>
       )}
 
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { v.sendText(draft); setDraft(""); } }}>
-        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="or type…"
-          className="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder-zinc-500" />
-        <button className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">
-          <SendHorizontal size={15} />
-        </button>
+        <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="or type…" />
+        <Button type="submit" size="icon"><SendHorizontal size={15} /></Button>
       </form>
     </main>
   );
