@@ -4,6 +4,9 @@
 
 @layer base {
   :root {
+    /* fallback so portals (Radix menus on <body>) never fall back to serif before the
+       next/font variable is applied to <html>; the app wrapper overrides this with Inter */
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
     --card: 0 0% 100%;
