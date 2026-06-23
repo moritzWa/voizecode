@@ -20,7 +20,7 @@ export const VOICES = [
   { id: "shimmer", label: "shimmer — soft ♀" },
 ];
 
-export type Line = { kind: "user" | "agent" | "status" | "speech"; text: string };
+export type Line = { kind: "user" | "agent" | "status" | "speech"; text: string; clip?: number };
 export type SessionInfo = { sessionId: string; label: string; model: string };
 // One held audio event for an unfocused session: a chunk (b) or an end marker (e), for clip c.
 type HeldEvent = { c: number; b?: string; e?: boolean };
@@ -45,6 +45,7 @@ export function useVoize() {
   const [micError, setMicError] = useState("");
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);
+  const [speakingClip, setSpeakingClip] = useState<number | null>(null); // clip id currently being voiced
   const [voice, setVoiceState] = useState("alloy");
   const voiceRef = useRef(voice);
   const [mics, setMics] = useState<{ id: string; label: string }[]>([]);
@@ -108,7 +109,7 @@ export function useVoize() {
   // ---- audio playback: streamed clips via MediaSource (active session only) ----
   const markSpeaking = (b: boolean) => { (window as unknown as { __voizeSpeaking?: boolean }).__voizeSpeaking = b; };
   useEffect(() => {
-    const p = new ClipPlayer(markSpeaking);
+    const p = new ClipPlayer(markSpeaking, setSpeakingClip);
     p.setRate(rateRef.current); // apply the initial speed (default 2x) before the first clip plays
     player.current = p;
     tone.current = new ThinkingTone();
@@ -179,19 +180,22 @@ export function useVoize() {
         case "model": setSessions((p) => p.map((s) => s.sessionId === sid ? { ...s, model: normModel(m.model) } : s)); break;
         case "transcript":
           setInterim((p) => ({ ...p, [sid]: m.text }));
-          // Real words confirm a VAD onset -> commit the barge-in (stop agent audio + interrupt claude).
+          // Mark that real words arrived (so onSpeechEnd treats this as speech, not noise).
+          // Do NOT stop the agent yet — the relay decides if it's a real turn (-> stop_audio)
+          // or a backchannel like "yeah" (-> utterance_discarded, and we resume).
           if (vadPending.current && isActive && m.text?.trim()) {
-            vadPending.current = false;
             vadHadTranscript.current = true;
             if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current);
-            send({ t: "barge_in", sessionId: activeRef.current });
-            stopAudio();
           }
+          break;
+        case "utterance_discarded": // backchannel/noise ignored -> clear interim + resume ducked audio
+          setInterim((p) => ({ ...p, [sid]: "" }));
+          if (isActive) { vadPending.current = false; if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current); player.current?.resume(); }
           break;
         case "user_echo": addLine(sid, { kind: "user", text: m.text }); setInterim((p) => ({ ...p, [sid]: "" })); break;
         case "agent_text": agentBuf.current[sid] = (agentBuf.current[sid] || "") + m.text; break;
         case "status": flushAgent(sid); addLine(sid, { kind: "status", text: m.text }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
-        case "speech_text": flushAgent(sid); addLine(sid, { kind: "speech", text: m.text }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
+        case "speech_text": flushAgent(sid); addLine(sid, { kind: "speech", text: m.text, clip: m.clip }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
         case "audio_chunk":
           if (isActive) player.current?.pushChunk(m.clip, b64ToBytes(m.b64));
           else { // hold it: play when the user focuses this session
@@ -366,6 +370,6 @@ export function useVoize() {
     lines: convos[activeId] || [], interim: interim[activeId] || "",
     thinking: !!thinking[activeId], model: active?.model || "sonnet",
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
-    voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute,
+    voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute, speakingClip,
   };
 }

@@ -96,9 +96,34 @@ function feedAudio(s: Session, pcmB64: string) {
   if (s.dg?.readyState === WebSocket.OPEN) { flushDg(s); s.dg.send(bytes); }
   else s.dgQueue.push(bytes);
 }
+// Backchannel words that, on their own, are NOT a real turn — someone in the room saying
+// "yeah" shouldn't hijack the agent. (See readme/research: ignore pure-backchannel utterances.)
+const FILLERS = new Set(["yeah", "yep", "yes", "yup", "ok", "okay", "mm", "mhm", "mmhm", "uh", "um",
+  "uhhuh", "huh", "hmm", "right", "sure", "cool", "nice", "oh", "ah", "no", "nope", "hi", "hey", "hello", "gotcha", "thanks"]);
+const MIN_TURN_WORDS = Number(Deno.env.get("VOIZE_MIN_TURN_WORDS") ?? 2);
+// A transcript counts as a real turn only if it's substantive: a phrase (>= MIN_TURN_WORDS),
+// or a single non-filler word (e.g. "stop", "delete"). Pure backchannel / lone fillers are discarded.
+function isSubstantive(text: string): boolean {
+  const words = text.toLowerCase().replace(/[^a-z0-9\s']/g, " ").split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  if (words.every((w) => FILLERS.has(w))) return false;
+  if (words.length < MIN_TURN_WORDS) return !FILLERS.has(words[0]);
+  return true;
+}
+
 function deliverUtterance(s: Session) {
   clearTimeout(s.utterTimer);
-  if (s.utter.trim()) { deliverUserTurn(s, s.utter.trim()); s.utter = ""; }
+  const text = s.utter.trim();
+  s.utter = "";
+  if (!text) return;
+  if (isSubstantive(text)) {
+    deliverUserTurn(s, text);
+  } else {
+    // Not a real instruction (stray "yeah", noise that transcribed to a filler) -> drop it
+    // and tell the client to resume the agent audio it ducked.
+    console.log(`[relay:${s.id}] ignored backchannel: "${text}"`);
+    toClient(s.id, { t: "utterance_discarded", sessionId: s.id });
+  }
 }
 function deliverUserTurn(s: Session, text: string) {
   console.log(`[relay:${s.id}] user:`, text);
@@ -129,8 +154,8 @@ function b64(bytes: Uint8Array): string {
 // so the client plays via MediaSource and keeps pitch-preserved playbackRate.
 async function speak(s: Session, text: string) {
   if (!text.trim() || narration === "silent") return;
-  toClient(s.id, { t: "speech_text", text, seq: nextSeq() });
   const clip = nextSeq();
+  toClient(s.id, { t: "speech_text", text, seq: nextSeq(), clip }); // clip ties the bubble to its audio (for highlight)
   const fmt = { encoding: "mp3" as const, sampleRate: TTS_SR };
   let any = false;
   const emit = (bytes: Uint8Array) => { if (bytes.length) { any = true; toClient(s.id, { t: "audio_chunk", clip, b64: b64(bytes), seq: nextSeq(), format: fmt }); } };

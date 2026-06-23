@@ -43,7 +43,8 @@ export type RelayToClient =
   | { t: "transcript"; sessionId: string; text: string; final: boolean } // live STT
   | { t: "user_echo"; sessionId: string; text: string; seq: number }     // committed user turn
   | { t: "status"; sessionId: string; text: string; seq: number }        // progress ("editing auth.ts")
-  | { t: "speech_text"; sessionId: string; text: string; seq: number }   // text being spoken
+  | { t: "speech_text"; sessionId: string; text: string; seq: number; clip: number } // text being spoken (clip = its audio id)
+  | { t: "utterance_discarded"; sessionId: string }                      // a backchannel/noise was ignored -> resume audio
   // Audio streams as ordered mp3 byte chunks grouped by `clip` (one spoken utterance),
   // so the client can append to a MediaSource and start playing before synthesis finishes.
   | { t: "audio_chunk"; sessionId: string; clip: number; b64: string; seq: number; format: AudioFormat }

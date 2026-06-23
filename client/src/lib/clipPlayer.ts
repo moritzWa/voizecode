@@ -34,7 +34,8 @@ export class ClipPlayer {
   private rate = 1;
   private speaking = false;
   private paused = false;
-  constructor(private onSpeaking?: SpeakingCb) {}
+  // onClip(id) when a clip starts playing, onClip(null) when nothing is playing (for UI highlight).
+  constructor(private onSpeaking?: SpeakingCb, private onClip?: (clip: number | null) => void) {}
 
   isPlaying() { return !!this.current; }
   isPaused() { return this.paused; }
@@ -71,6 +72,7 @@ export class ClipPlayer {
     this.building.clear(); this.order = []; this.current = null;
     this.paused = false;
     this.emit(false);
+    this.onClip?.(null);
   }
 
   private ensure(id: number): Clip {
@@ -122,6 +124,7 @@ export class ClipPlayer {
     const clip = this.building.get(id);
     if (!clip) { this.order.shift(); this.startNext(); return; }
     this.current = clip;
+    this.onClip?.(clip.id); // highlight the bubble for this clip
     if (clip.playable) this.play(clip);
     // (blob clips not yet playable will be started by endClip)
   }
@@ -141,6 +144,7 @@ export class ClipPlayer {
       this.current = null;
       if (!this.order.length) this.emit(false);
       this.startNext();
+      if (!this.current) this.onClip?.(null); // nothing left to play -> clear highlight
     }
   }
 

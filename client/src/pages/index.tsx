@@ -83,7 +83,7 @@ export default function Home() {
           l.kind === "agent" ? <AgentMessage key={i} text={l.text} /> :
           <div key={i} className={
             l.kind === "user" ? "self-end break-words rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white" :
-            l.kind === "speech" ? "break-words rounded-lg bg-zinc-100 px-3 py-1.5 text-sm" :
+            l.kind === "speech" ? `break-words rounded-lg px-3 py-1.5 text-sm transition-colors ${l.clip != null && l.clip === v.speakingClip ? "bg-blue-100 ring-1 ring-blue-300" : "bg-zinc-100"}` :
             "break-words px-1 text-xs italic text-zinc-400"
           }>{l.text}</div>
         ))}
