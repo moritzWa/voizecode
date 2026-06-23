@@ -275,6 +275,7 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
     }
     case "turn_end": narrateFinal(s, (m.fullText as string) ?? ""); break;
     case "sessions_list": toClient(s.id, { t: "sessions_list", sessions: m.sessions, projects: m.projects }); break;
+    case "history": toClient(s.id, { t: "history", messages: m.messages }); break;
     case "exit": console.log(`[relay:${s.id}] agent exited`, m.code); break;
   }
 }

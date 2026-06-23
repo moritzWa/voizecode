@@ -39,9 +39,11 @@ export type AgentToRelay =
   | { t: "turn_end"; fullText: string }            // assistant turn finished; fullText = whole reply
   | { t: "exit"; code: number }
   | { t: "sessions_list"; sessions: SavedSession[]; projects: ProjectInfo[] } // past sessions + project dirs
+  | { t: "history"; sessionId: string; messages: HistoryMsg[] }              // resumed transcript for the viewer
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
 export interface SavedSession { id: string; cwd: string; label: string; preview: string; mtime: number }
+export interface HistoryMsg { role: "user" | "assistant"; text: string }
 export interface ProjectInfo { cwd: string; label: string; count: number; mtime: number }
 
 // ---- relay -> client ---- (all carry sessionId)
@@ -61,6 +63,7 @@ export type RelayToClient =
   | { t: "model"; sessionId: string; model: string }                     // current claude model
   | { t: "sessions"; sessions: SessionInfo[] }                           // active session list (tabs)
   | { t: "sessions_list"; sessions: SavedSession[]; projects: ProjectInfo[] } // past sessions + projects (browser)
+  | { t: "history"; sessionId: string; messages: HistoryMsg[] }          // resumed transcript for the viewer
   | { t: "pong" };                                                       // heartbeat reply
 
 export interface SessionInfo { sessionId: string; label: string; model: string }

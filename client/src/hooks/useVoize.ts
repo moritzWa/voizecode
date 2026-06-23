@@ -183,6 +183,12 @@ export function useVoize() {
         }
         case "model": setSessions((p) => p.map((s) => s.sessionId === sid ? { ...s, model: normModel(m.model) } : s)); break;
         case "sessions_list": setSavedSessions(m.sessions || []); setProjects(m.projects || []); break;
+        case "history": { // resumed transcript -> fill the viewer
+          const lines: Line[] = (m.messages || []).map((mm: { role: string; text: string }) =>
+            ({ kind: mm.role === "user" ? "user" : "agent", text: mm.text }));
+          setConvos((p) => ({ ...p, [sid]: lines }));
+          break;
+        }
         case "transcript":
           setInterim((p) => ({ ...p, [sid]: m.text }));
           // Mark that real words arrived (so onSpeechEnd treats this as speech, not noise).
@@ -378,12 +384,18 @@ export function useVoize() {
   }, [stopAudio]);
 
   const active = sessions.find((s) => s.sessionId === activeId);
+  // Per-tab title = first user message of that chat (so same-dir chats are distinguishable).
+  const titles: Record<string, string> = {};
+  for (const [sid, ls] of Object.entries(convos)) {
+    const u = ls.find((l) => l.kind === "user");
+    if (u) titles[sid] = u.text;
+  }
   return {
     connected, live, sessions, activeId, switchSession, unread,
     lines: convos[activeId] || [], interim: interim[activeId] || "",
     thinking: !!thinking[activeId], model: active?.model || "sonnet",
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
     voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute, speakingClip,
-    savedSessions, projects, requestSessions, openSession, newInProject,
+    savedSessions, projects, requestSessions, openSession, newInProject, titles,
   };
 }

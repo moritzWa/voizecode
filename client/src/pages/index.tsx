@@ -119,41 +119,50 @@ export default function Home() {
         </div>
       </header>
 
-      {/* session tabs */}
-      <div className="flex gap-1 overflow-x-auto">
-        {v.sessions.length === 0 && <span className="text-xs text-muted-foreground">no sessions — start a laptop agent in a repo</span>}
-        {v.sessions.map((s) => (
-          <div key={s.sessionId}
-            className={cn("flex items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 text-sm",
-              s.sessionId === v.activeId ? "bg-card font-medium" : "bg-muted text-muted-foreground")}>
-            <button onClick={() => v.switchSession(s.sessionId)} className="flex items-center gap-1.5 py-1.5">
-              {s.label}
-              {v.unread[s.sessionId] && s.sessionId !== v.activeId && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
-            </button>
-            {v.sessions.length > 1 && (
-              <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => v.closeSession(s.sessionId)} title="Close chat (ends its claude)" aria-label="Close chat">
-                <X size={13} />
-              </Button>
-            )}
-          </div>
-        ))}
-        {v.sessions.length > 0 && (
-          <Button variant="ghost" size="icon" className="h-8 rounded-t-lg" onClick={openBrowser} title="New chat" aria-label="New chat">
-            <Plus size={15} />
-          </Button>
-        )}
-      </div>
+      {/* session tabs attached to the chat panel (no gap) */}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-end gap-1 overflow-x-auto">
+          {v.sessions.length === 0 && <span className="px-1 pb-2 text-xs text-muted-foreground">no sessions — start the laptop agent</span>}
+          {v.sessions.map((s) => {
+            const activeTab = s.sessionId === v.activeId;
+            const title = v.titles[s.sessionId];
+            return (
+              <div key={s.sessionId}
+                className={cn("flex max-w-[230px] items-center gap-1 rounded-t-lg border border-b-0 pl-3 pr-1 text-sm",
+                  activeTab ? "-mb-px border-border bg-card" : "border-transparent bg-muted text-muted-foreground hover:bg-muted/70")}>
+                <button onClick={() => v.switchSession(s.sessionId)} className="flex min-w-0 items-center gap-1.5 py-2">
+                  <span className="truncate">
+                    <span className="font-medium">{s.label}</span>
+                    {title && <span className="text-muted-foreground"> · {title}</span>}
+                  </span>
+                  {v.unread[s.sessionId] && !activeTab && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
+                </button>
+                {v.sessions.length > 1 && (
+                  <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0 opacity-60 hover:opacity-100" onClick={() => v.closeSession(s.sessionId)} title="Close chat (ends its claude)" aria-label="Close chat">
+                    <X size={12} />
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+          {v.sessions.length > 0 && (
+            <Button variant="ghost" size="icon" className="mb-px h-8 shrink-0" onClick={openBrowser} title="New chat" aria-label="New chat">
+              <Plus size={15} />
+            </Button>
+          )}
+        </div>
 
-      <div className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-lg border bg-card p-3">
-        {v.lines.map((l, i) => (
-          l.kind === "agent" ? <AgentMessage key={i} text={l.text} /> :
-          <div key={i} className={cn("break-words",
-            l.kind === "user" ? "self-end rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground" :
-            l.kind === "speech" ? cn("rounded-lg px-3 py-1.5 text-sm transition-colors",
-              l.clip != null && l.clip === v.speakingClip ? "bg-accent ring-1 ring-primary/40" : "bg-muted") :
-            "px-1 text-xs italic text-muted-foreground")}>{l.text}</div>
-        ))}
-        {v.interim && <div className="self-end px-3 text-sm text-muted-foreground">{v.interim}…</div>}
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg rounded-tl-none border bg-card p-3">
+          {v.lines.map((l, i) => (
+            l.kind === "agent" ? <AgentMessage key={i} text={l.text} /> :
+            <div key={i} className={cn("break-words",
+              l.kind === "user" ? "self-end rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground" :
+              l.kind === "speech" ? cn("rounded-lg px-3 py-1.5 text-sm transition-colors",
+                l.clip != null && l.clip === v.speakingClip ? "bg-accent ring-1 ring-primary/40" : "bg-muted") :
+              "px-1 text-xs italic text-muted-foreground")}>{l.text}</div>
+          ))}
+          {v.interim && <div className="self-end px-3 text-sm text-muted-foreground">{v.interim}…</div>}
+        </div>
       </div>
 
       <div className="flex items-center gap-2 text-xs text-muted-foreground">

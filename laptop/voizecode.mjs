@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
-import { readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
 import WebSocket from "ws";
 
 const RELAY_URL = process.env.VOIZE_RELAY_URL || "ws://localhost:8787";
@@ -34,6 +34,7 @@ const claudeArgs = (m, resumeId) => [
 function startChat(sessionId, label, initialModel, cwd, resumeId) {
   let model = initialModel;
   let resume = resumeId || null;
+  const history = resume ? buildHistory(resume) : null; // prior transcript to show in the viewer
   let claude = null, buf = "", turnText = "";
   let ws = null, hbTimer = null, wdTimer = null, retry = 0, closed = false;
 
@@ -76,6 +77,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
       console.log(`[${sessionId}] relay connected`);
       send({ t: "hello", role: "agent", sessionId, label });
       announce();
+      if (history && history.length) send({ t: "history", sessionId, messages: history }); // populate viewer on resume
       hbTimer = setInterval(() => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: "ping" })); }, 10000);
       armWatchdog();
     });
@@ -174,6 +176,36 @@ function firstUserText(content) {
   if (Array.isArray(content)) return content.find((c) => c?.type === "text" && c.text)?.text || "";
   return "";
 }
+// Reconstruct a resumed session's transcript (real user/assistant text, last 60 msgs) for the viewer.
+function buildHistory(id) {
+  const root = join(homedir(), ".claude", "projects");
+  let file = null;
+  try {
+    for (const d of readdirSync(root)) {
+      const f = join(root, d, id + ".jsonl");
+      try { statSync(f); file = f; break; } catch { /* not here */ }
+    }
+  } catch { return []; }
+  if (!file) return [];
+  let raw = "";
+  try { raw = readFileSync(file, "utf8"); } catch { return []; }
+  const msgs = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let m; try { m = JSON.parse(line); } catch { continue; }
+    if (m.isMeta || m.isSidechain) continue;
+    if (m.type === "user" && m.message?.content) {
+      const text = firstUserText(m.message.content).trim();
+      if (!text || /^<(local-command|command-)/.test(text)) continue; // skip tool results + caveats
+      msgs.push({ role: "user", text });
+    } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+      const text = m.message.content.filter((b) => b.type === "text" && b.text).map((b) => b.text).join("").trim();
+      if (text) msgs.push({ role: "assistant", text });
+    }
+  }
+  return msgs.slice(-60);
+}
+
 function scanSessions() {
   const root = join(homedir(), ".claude", "projects");
   let dirs = [];
