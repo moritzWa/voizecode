@@ -1,8 +1,9 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
+import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,16 +28,72 @@ function AgentMessage({ text }: { text: string }) {
   );
 }
 
+function timeAgo(ms: number) {
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+// Modal to start a new chat in a project that already has sessions, or resume a past session.
+function SessionBrowser({ projects, sessions, onProject, onSession, onClose }: {
+  projects: ProjectInfo[]; sessions: SavedSession[];
+  onProject: (cwd: string, label: string) => void;
+  onSession: (s: SavedSession) => void; onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[8vh]" onClick={onClose}>
+      <div className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">Open a chat</h2>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
+        </div>
+        <div className="overflow-y-auto p-2">
+          <div className="px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">New chat in a project</div>
+          {projects.length === 0 && <div className="px-2 py-2 text-xs text-muted-foreground">No projects found yet.</div>}
+          {projects.map((p) => (
+            <button key={p.cwd} onClick={() => onProject(p.cwd, p.label)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent">
+              <FolderOpen size={15} className="shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="font-medium">{p.label}</span>
+                <span className="block truncate text-xs text-muted-foreground">{p.cwd}</span>
+              </span>
+              <span className="shrink-0 text-xs text-muted-foreground">{p.count} session{p.count === 1 ? "" : "s"}</span>
+            </button>
+          ))}
+
+          <div className="mt-2 px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Resume a session</div>
+          {sessions.length === 0 && <div className="px-2 py-2 text-xs text-muted-foreground">No past sessions.</div>}
+          {sessions.map((s) => (
+            <button key={s.id} onClick={() => onSession(s)}
+              className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent">
+              <History size={15} className="mt-0.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{s.preview}</span>
+                <span className="block truncate text-xs text-muted-foreground">{s.label} · {timeAgo(s.mtime)}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const v = useVoize();
   const [draft, setDraft] = useState("");
+  const [browser, setBrowser] = useState(false);
+  const openBrowser = () => { v.requestSessions(); setBrowser(true); };
 
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col gap-3 p-4">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-semibold">voizecode</h1>
-          <Button size="sm" onClick={v.newSession} title="New chat in a separate tab">
+          <Button size="sm" onClick={openBrowser} title="Open or start a chat">
             <Plus size={13} /> New chat
           </Button>
         </div>
@@ -81,7 +138,7 @@ export default function Home() {
           </div>
         ))}
         {v.sessions.length > 0 && (
-          <Button variant="ghost" size="icon" className="h-8 rounded-t-lg" onClick={v.newSession} title="New chat" aria-label="New chat">
+          <Button variant="ghost" size="icon" className="h-8 rounded-t-lg" onClick={openBrowser} title="New chat" aria-label="New chat">
             <Plus size={15} />
           </Button>
         )}
@@ -140,6 +197,15 @@ export default function Home() {
         <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="or type…" />
         <Button type="submit" size="icon"><SendHorizontal size={15} /></Button>
       </form>
+
+      {browser && (
+        <SessionBrowser
+          projects={v.projects} sessions={v.savedSessions}
+          onProject={(cwd, label) => { v.newInProject(cwd, label); setBrowser(false); }}
+          onSession={(s) => { v.openSession(s.id, s.cwd, s.label); setBrowser(false); }}
+          onClose={() => setBrowser(false)}
+        />
+      )}
     </main>
   );
 }

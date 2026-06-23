@@ -24,8 +24,10 @@ export type ClientToRelay =
   | { t: "set_model"; sessionId: string; model: ClaudeModel }
   | { t: "set_voice"; voice: string }               // TTS voice (global)
   | { t: "reset"; sessionId: string }               // clear UI + fresh claude context (same tab)
-  | { t: "new_session"; sessionId: string }         // create a sibling chat on this session's agent
+  // create a chat: in cwd (new) and/or resuming a past Claude Code session. sessionId routes to the agent.
+  | { t: "new_session"; sessionId: string; cwd?: string; resumeId?: string; label?: string }
   | { t: "close_session"; sessionId: string }       // close a chat (kills its claude subprocess)
+  | { t: "list_sessions"; sessionId: string }       // ask the agent for past sessions + projects
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
 // ---- agent (laptop) -> relay ----
@@ -36,7 +38,11 @@ export type AgentToRelay =
   | { t: "tool_use"; name: string; summary: string; speak: boolean } // tool call started; speak=worth voicing
   | { t: "turn_end"; fullText: string }            // assistant turn finished; fullText = whole reply
   | { t: "exit"; code: number }
+  | { t: "sessions_list"; sessions: SavedSession[]; projects: ProjectInfo[] } // past sessions + project dirs
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
+
+export interface SavedSession { id: string; cwd: string; label: string; preview: string; mtime: number }
+export interface ProjectInfo { cwd: string; label: string; count: number; mtime: number }
 
 // ---- relay -> client ---- (all carry sessionId)
 export type RelayToClient =
@@ -53,7 +59,8 @@ export type RelayToClient =
   | { t: "stop_audio"; sessionId: string }                               // barge-in: flush playback
   | { t: "thinking"; sessionId: string; on: boolean }                    // agent busy indicator
   | { t: "model"; sessionId: string; model: string }                     // current claude model
-  | { t: "sessions"; sessions: SessionInfo[] }                           // active session list
+  | { t: "sessions"; sessions: SessionInfo[] }                           // active session list (tabs)
+  | { t: "sessions_list"; sessions: SavedSession[]; projects: ProjectInfo[] } // past sessions + projects (browser)
   | { t: "pong" };                                                       // heartbeat reply
 
 export interface SessionInfo { sessionId: string; label: string; model: string }
@@ -64,8 +71,9 @@ export type RelayToAgent =
   | { t: "interrupt" }                  // stop claude mid-turn
   | { t: "set_model"; model: ClaudeModel }
   | { t: "reset" }                      // respawn claude = fresh context
-  | { t: "new_chat" }                   // spawn a sibling chat on this agent
+  | { t: "new_chat"; cwd?: string; resumeId?: string; label?: string } // spawn a chat (in cwd, maybe resuming)
   | { t: "close" }                      // kill this chat (claude + socket)
+  | { t: "list_sessions" }              // scan + return past sessions/projects
   | { t: "pong" };                      // heartbeat reply
 
 export type NarrationMode = "narrate" | "final-only" | "silent";

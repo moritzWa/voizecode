@@ -22,6 +22,8 @@ export const VOICES = [
 
 export type Line = { kind: "user" | "agent" | "status" | "speech"; text: string; clip?: number };
 export type SessionInfo = { sessionId: string; label: string; model: string };
+export type SavedSession = { id: string; cwd: string; label: string; preview: string; mtime: number };
+export type ProjectInfo = { cwd: string; label: string; count: number; mtime: number };
 // One held audio event for an unfocused session: a chunk (b) or an end marker (e), for clip c.
 type HeldEvent = { c: number; b?: string; e?: boolean };
 
@@ -46,6 +48,8 @@ export function useVoize() {
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);
   const [speakingClip, setSpeakingClip] = useState<number | null>(null); // clip id currently being voiced
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]); // past sessions (browser)
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
   const [voice, setVoiceState] = useState("alloy");
   const voiceRef = useRef(voice);
   const [mics, setMics] = useState<{ id: string; label: string }[]>([]);
@@ -178,6 +182,7 @@ export function useVoize() {
           break;
         }
         case "model": setSessions((p) => p.map((s) => s.sessionId === sid ? { ...s, model: normModel(m.model) } : s)); break;
+        case "sessions_list": setSavedSessions(m.sessions || []); setProjects(m.projects || []); break;
         case "transcript":
           setInterim((p) => ({ ...p, [sid]: m.text }));
           // Mark that real words arrived (so onSpeechEnd treats this as speech, not noise).
@@ -341,6 +346,14 @@ export function useVoize() {
   }, [live, stop, start]);
   // New chat as a separate session/tab (the agent spawns a sibling claude); auto-focuses it.
   const newSession = useCallback(() => { wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current }); }, []);
+  // Session browser: fetch past sessions/projects, resume one, or start fresh in a project dir.
+  const requestSessions = useCallback(() => send({ t: "list_sessions", sessionId: activeRef.current }), []);
+  const openSession = useCallback((id: string, cwd: string, label: string) => {
+    wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, resumeId: id, label });
+  }, []);
+  const newInProject = useCallback((cwd: string, label: string) => {
+    wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, label });
+  }, []);
   // Close a chat: kill its claude subprocess + drop the tab. Switches away if it was active.
   const closeSession = useCallback((sid: string) => {
     send({ t: "close_session", sessionId: sid });
@@ -371,5 +384,6 @@ export function useVoize() {
     thinking: !!thinking[activeId], model: active?.model || "sonnet",
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
     voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute, speakingClip,
+    savedSessions, projects, requestSessions, openSession, newInProject,
   };
 }

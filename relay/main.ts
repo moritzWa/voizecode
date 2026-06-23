@@ -274,6 +274,7 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
       break;
     }
     case "turn_end": narrateFinal(s, (m.fullText as string) ?? ""); break;
+    case "sessions_list": toClient(s.id, { t: "sessions_list", sessions: m.sessions, projects: m.projects }); break;
     case "exit": console.log(`[relay:${s.id}] agent exited`, m.code); break;
   }
 }
@@ -290,7 +291,8 @@ function handleClient(m: Record<string, unknown>) {
     case "barge_in": toClient(s.id, { t: "stop_audio" }); toAgent(s, { t: "interrupt" }); break;
     case "set_model": toAgent(s, { t: "set_model", model: m.model }); break;
     case "reset": toClient(s.id, { t: "stop_audio" }); toAgent(s, { t: "reset" }); break;
-    case "new_session": toAgent(s, { t: "new_chat" }); break; // agent spawns a sibling chat -> new tab
+    case "new_session": toAgent(s, { t: "new_chat", cwd: m.cwd, resumeId: m.resumeId, label: m.label }); break;
+    case "list_sessions": toAgent(s, { t: "list_sessions" }); break;
     case "close_session": // tell the agent to kill that chat, drop the session, remove the tab
       toAgent(s, { t: "close" });
       s.dg?.close();

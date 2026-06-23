@@ -1,26 +1,24 @@
 #!/usr/bin/env node
-// voizecode — laptop side. Hosts one or more "chats", each a persistent `claude`
-// stream-json session bridged to the relay over its OWN WebSocket. Because the relay
-// treats one session per socket, N chats = N sockets and no per-message routing is needed.
+// voizecode — laptop side. Run it ONCE (anywhere). It hosts one or more "chats", each a
+// persistent `claude` stream-json session in some directory, bridged to the relay over its
+// OWN WebSocket. The web app can list past Claude Code sessions across all directories and
+// open/resume any of them, or start a new chat in any project that already has sessions.
 //
 //   client (mic) -> relay (STT) --user_message--> chat --> claude stdin
 //   claude stdout --delta/tool_use/turn_end--> chat --> relay (narrate+TTS) -> client
-//
-// New chat: the UI asks the relay, which forwards `new_chat` to an existing chat's socket;
-// this process then spins up a sibling chat (new socket + claude). Model switch / reset
-// respawn that chat's claude (fresh context).
 
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { homedir } from "node:os";
+import { readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import WebSocket from "ws";
 
 const RELAY_URL = process.env.VOIZE_RELAY_URL || "ws://localhost:8787";
 const DEFAULT_MODEL = process.env.VOIZE_MODEL || "sonnet";
 const RECONNECT_CAP_MS = Number(process.env.VOIZE_RECONNECT_CAP_MS) || 15000;
-const REPO = process.env.VOIZE_SESSION || basename(process.cwd());
 
-const claudeArgs = (m) => [
+const claudeArgs = (m, resumeId) => [
   "-p",
   "--input-format", "stream-json",
   "--output-format", "stream-json",
@@ -28,11 +26,14 @@ const claudeArgs = (m) => [
   "--include-partial-messages",
   "--dangerously-skip-permissions",
   "--model", m,
+  ...(resumeId ? ["--resume", resumeId] : []),
 ];
 
-// One self-contained chat: its own claude process + its own relay websocket.
-function startChat(sessionId, label, initialModel) {
+// One self-contained chat: its own claude process (in `cwd`, optionally resuming a session)
+// + its own relay websocket. The relay keys sessions by socket, so N chats = N sockets.
+function startChat(sessionId, label, initialModel, cwd, resumeId) {
   let model = initialModel;
+  let resume = resumeId || null;
   let claude = null, buf = "", turnText = "";
   let ws = null, hbTimer = null, wdTimer = null, retry = 0, closed = false;
 
@@ -40,9 +41,9 @@ function startChat(sessionId, label, initialModel) {
   const announce = () => send({ t: "init", sessionId, model, label });
 
   function startClaude() {
-    const child = spawn("claude", claudeArgs(model), { stdio: ["pipe", "pipe", "inherit"] });
+    const child = spawn("claude", claudeArgs(model, resume), { stdio: ["pipe", "pipe", "inherit"], cwd });
     claude = child; buf = ""; turnText = "";
-    console.log(`[${sessionId}] spawned claude (${model}) in ${process.cwd()}`);
+    console.log(`[${sessionId}] spawned claude (${model}${resume ? " resume " + resume.slice(0, 8) : ""}) in ${cwd}`);
     child.stdout.on("data", (d) => { if (child === claude) onStdout(d); });
     child.on("exit", (c) => { if (child === claude) { console.log(`[${sessionId}] claude exited`, c); send({ t: "exit", code: c ?? 0 }); } });
   }
@@ -50,11 +51,12 @@ function startChat(sessionId, label, initialModel) {
     if (next === model || !["haiku", "sonnet", "opus"].includes(next)) return;
     console.log(`[${sessionId}] model ${model} -> ${next}`);
     model = next;
-    const old = claude; startClaude(); old?.stdin.end(); old?.kill("SIGINT");
+    const old = claude; startClaude(); old?.stdin.end(); old?.kill("SIGINT"); // keeps resume -> same context
     announce();
   }
   function resetSession() {
     console.log(`[${sessionId}] reset (fresh claude context)`);
+    resume = null; // new chat = drop any resumed session
     const old = claude; startClaude(); old?.stdin.end(); old?.kill("SIGINT");
     announce();
   }
@@ -85,7 +87,8 @@ function startChat(sessionId, label, initialModel) {
       else if (m.t === "interrupt") { interrupt(); }
       else if (m.t === "set_model") { switchModel(m.model); }
       else if (m.t === "reset") { resetSession(); }
-      else if (m.t === "new_chat") { createChat(); } // spawn a sibling chat
+      else if (m.t === "new_chat") { createChat({ cwd: m.cwd, resumeId: m.resumeId, label: m.label }); }
+      else if (m.t === "list_sessions") { send({ t: "sessions_list", ...scanSessions() }); }
       else if (m.t === "close") { // kill this chat for good (UI closed the tab)
         closed = true;
         clearTimers();
@@ -159,15 +162,65 @@ function toolSpeakable(block) {
   }
 }
 
+// ---- scan past Claude Code sessions (~/.claude/projects/<enc-cwd>/<uuid>.jsonl) ----
+function readHead(file, maxBytes = 131072) {
+  let fd;
+  try { fd = openSync(file, "r"); const b = Buffer.alloc(maxBytes); const n = readSync(fd, b, 0, maxBytes, 0); return b.subarray(0, n).toString("utf8"); }
+  catch { return ""; }
+  finally { if (fd !== undefined) { try { closeSync(fd); } catch { /* noop */ } } }
+}
+function firstUserText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.find((c) => c?.type === "text" && c.text)?.text || "";
+  return "";
+}
+function scanSessions() {
+  const root = join(homedir(), ".claude", "projects");
+  let dirs = [];
+  try { dirs = readdirSync(root); } catch { return { sessions: [], projects: [] }; }
+  const sessions = [];
+  for (const d of dirs) {
+    const dir = join(root, d);
+    let files = [];
+    try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
+    for (const f of files) {
+      const file = join(dir, f);
+      let mtime = 0;
+      try { mtime = statSync(file).mtimeMs; } catch { continue; }
+      let cwd = "", preview = "";
+      for (const line of readHead(file).split("\n")) {
+        if (!line.trim()) continue;
+        let m; try { m = JSON.parse(line); } catch { continue; }
+        if (!cwd && m.cwd) cwd = m.cwd;
+        if (!preview && m.type === "user" && m.message?.content) preview = firstUserText(m.message.content).trim();
+        if (cwd && preview) break;
+      }
+      if (!cwd || !preview) continue; // need a real dir + an actual prompt
+      if (/^\/(private\/)?(tmp|var\/folders)\//.test(cwd)) continue; // skip throwaway temp dirs
+      sessions.push({ id: f.replace(/\.jsonl$/, ""), cwd, label: basename(cwd), preview: preview.slice(0, 100), mtime });
+    }
+  }
+  sessions.sort((a, b) => b.mtime - a.mtime);
+  // distinct projects = dirs that already have sessions (the real codebases), most-recent first
+  const byCwd = new Map();
+  for (const s of sessions) {
+    const p = byCwd.get(s.cwd) || { cwd: s.cwd, label: basename(s.cwd), count: 0, mtime: 0 };
+    p.count++; p.mtime = Math.max(p.mtime, s.mtime); byCwd.set(s.cwd, p);
+  }
+  const projects = [...byCwd.values()].sort((a, b) => b.mtime - a.mtime).slice(0, 40);
+  return { sessions: sessions.slice(0, 60), projects };
+}
+
 // ---- chat registry ----
 const chats = [];
 let chatCounter = 0;
-function createChat() {
+function createChat(opts = {}) {
   chatCounter++;
-  const sessionId = chatCounter === 1 ? REPO : `${REPO}#${chatCounter}`;
-  const label = chatCounter === 1 ? REPO : `${REPO} ${chatCounter}`;
-  chats.push(startChat(sessionId, label, DEFAULT_MODEL));
+  const cwd = opts.cwd || process.cwd();
+  const label = opts.label || basename(cwd) || `chat ${chatCounter}`;
+  const sessionId = `${(basename(cwd) || "chat").replace(/[^\w.-]/g, "_")}#${chatCounter}`;
+  chats.push(startChat(sessionId, label, DEFAULT_MODEL, cwd, opts.resumeId || null));
 }
-createChat(); // first chat
+createChat(); // first chat in the launch directory
 
 process.on("SIGINT", () => { for (const c of chats) c.kill(); process.exit(0); });
