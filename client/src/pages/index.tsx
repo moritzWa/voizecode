@@ -91,8 +91,8 @@ function SettingRow({ title, desc, on, onChange }: { title: string; desc: string
         <div className="text-xs text-muted-foreground">{desc}</div>
       </div>
       <button role="switch" aria-checked={on} onClick={() => onChange(!on)}
-        className={cn("relative h-6 w-11 shrink-0 rounded-full transition-colors", on ? "bg-primary" : "bg-muted")}>
-        <span className={cn("absolute top-0.5 h-5 w-5 rounded-full bg-background shadow transition-transform", on ? "translate-x-[22px]" : "translate-x-0.5")} />
+        className={cn("inline-flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors", on ? "bg-primary" : "bg-input")}>
+        <span className={cn("h-5 w-5 rounded-full bg-background shadow transition-transform", on ? "translate-x-5" : "translate-x-0")} />
       </button>
     </div>
   );

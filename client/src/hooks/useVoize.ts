@@ -295,10 +295,11 @@ export function useVoize() {
     const node = ctx.createScriptProcessor(4096, 1, 1); // TODO v1: AudioWorklet
     proc.current = node;
     node.onaudioprocess = (ev) => {
-      if (mutedRef.current) return; // muted: don't send mic audio (ambient talk won't disturb the AI)
       const f = ev.inputBuffer.getChannelData(0);
-      const pcm = new Int16Array(f.length);
-      for (let i = 0; i < f.length; i++) { const x = Math.max(-1, Math.min(1, f[i])); pcm[i] = x < 0 ? x * 0x8000 : x * 0x7fff; }
+      const pcm = new Int16Array(f.length); // muted -> leave as silence (zeros): blocks ambient talk,
+      if (!mutedRef.current) {              // but keeps the stream alive so Deepgram finalizes your last words
+        for (let i = 0; i < f.length; i++) { const x = Math.max(-1, Math.min(1, f[i])); pcm[i] = x < 0 ? x * 0x8000 : x * 0x7fff; }
+      }
       let bin = ""; const b = new Uint8Array(pcm.buffer);
       for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
       send({ t: "audio", sessionId: activeRef.current, pcm: btoa(bin) });
