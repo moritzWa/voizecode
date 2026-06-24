@@ -208,8 +208,16 @@ export default function Home() {
       )}
 
       <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { v.sendText(draft); setDraft(""); } }}>
-        <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="or type…" />
-        <Button type="submit" size="icon"><SendHorizontal size={15} /></Button>
+        <Input value={draft} onChange={(e) => setDraft(e.target.value)}
+          placeholder={v.thinking && !draft.trim() ? "running — type to steer, or stop →" : "or type…"}
+          onKeyDown={(e) => { if (e.key === "Escape" && v.thinking) { e.preventDefault(); v.interruptNow(); } }} />
+        {draft.trim() ? (
+          <Button type="submit" size="icon" title="Send (steers the agent if it's running)"><SendHorizontal size={15} /></Button>
+        ) : v.thinking ? (
+          <Button type="button" variant="destructive" size="icon" title="Stop the agent (Esc)" onClick={v.interruptNow}><Square size={15} /></Button>
+        ) : (
+          <Button type="submit" size="icon" disabled><SendHorizontal size={15} /></Button>
+        )}
       </form>
 
       {browser && (
