@@ -45,13 +45,12 @@ API keys live only in `relay/.env` (gitignored). See `.env.example` for all opti
 ## Run (talk to your laptop in the browser)
 
 ```bash
-npm run dev                   # starts relay + client
-# in the repo you want claude to work on:
-cd ~/some/project && node ~/CODE/voizecode/laptop/voizecode.mjs
+npm run dev                   # starts relay + client + the laptop agent (all three)
 ```
 
-Open http://localhost:3030, hit **Start call**, talk. To use it from your phone on the same
-wifi, open `http://<laptop-LAN-IP>:3030` in Safari.
+Open http://localhost:3030 in Chrome, hit **Start call**, talk. The agent runs once and can
+open/resume Claude Code sessions in any project via **+ New chat** — no need to launch it
+per-repo. To use it from your phone on the same wifi, open `http://<laptop-LAN-IP>:3030` in Safari.
 
 ## Tests
 

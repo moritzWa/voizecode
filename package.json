@@ -3,9 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n relay,client -c magenta,cyan \"npm:dev:relay\" \"npm:dev:client\"",
+    "dev": "concurrently -k -n relay,client,agent -c magenta,cyan,green \"npm:dev:relay\" \"npm:dev:client\" \"npm:dev:agent\"",
     "dev:relay": "cd relay && deno task dev",
     "dev:client": "cd client && npm run dev",
+    "dev:agent": "node laptop/voizecode.mjs",
     "agent": "cd laptop && node voizecode.mjs",
     "setup": "cd laptop && npm install && cd ../client && npm install"
   },
