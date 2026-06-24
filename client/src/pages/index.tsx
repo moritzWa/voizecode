@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check } from "lucide-react";
@@ -6,7 +6,7 @@ import { useVoize, VOICES } from "@/hooks/useVoize";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -87,7 +87,10 @@ export default function Home() {
   const [draft, setDraft] = useState("");
   const [browser, setBrowser] = useState(false);
   const [copied, setCopied] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const openBrowser = () => { v.requestSessions(); setBrowser(true); };
+  const growInput = (el: HTMLTextAreaElement) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; };
+  const submit = () => { if (!draft.trim()) return; v.sendText(draft); setDraft(""); if (taRef.current) taRef.current.style.height = "auto"; };
 
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col gap-3 p-4">
@@ -207,10 +210,15 @@ export default function Home() {
         </div>
       )}
 
-      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { v.sendText(draft); setDraft(""); } }}>
-        <Input value={draft} onChange={(e) => setDraft(e.target.value)}
-          placeholder={v.thinking && !draft.trim() ? "running — type to steer, or stop →" : "or type…"}
-          onKeyDown={(e) => { if (e.key === "Escape" && v.thinking) { e.preventDefault(); v.interruptNow(); } }} />
+      <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <Textarea ref={taRef} rows={1} value={draft}
+          onChange={(e) => { setDraft(e.target.value); growInput(e.currentTarget); }}
+          placeholder={v.thinking && !draft.trim() ? "running — type to steer, or stop →" : "or type…  (Shift+Enter = newline)"}
+          className="max-h-40 min-h-[38px] resize-none overflow-y-auto leading-snug"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+            else if (e.key === "Escape" && v.thinking) { e.preventDefault(); v.interruptNow(); }
+          }} />
         {draft.trim() ? (
           <Button type="submit" size="icon" title="Send (steers the agent if it's running)"><SendHorizontal size={15} /></Button>
         ) : v.thinking ? (
