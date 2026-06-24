@@ -17,6 +17,8 @@ fi
 # Open a chat in the current directory (a tab for this codebase).
 node "$VOIZE_DIR/bin/new-chat.mjs" "$TARGET" || true
 
-# Open the web app.
-( open -a "Google Chrome" "http://localhost:3030" >/dev/null 2>&1 || open "http://localhost:3030" >/dev/null 2>&1 ) || true
+# Open the web app (prefer Brave, then Chrome, then the default browser).
+open -a "Brave Browser" "http://localhost:3030" 2>/dev/null \
+  || open -a "Google Chrome" "http://localhost:3030" 2>/dev/null \
+  || open "http://localhost:3030" 2>/dev/null || true
 echo "voize → http://localhost:3030  (chat: $(basename "$TARGET"))"
