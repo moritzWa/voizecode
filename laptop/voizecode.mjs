@@ -42,7 +42,9 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
   const announce = () => send({ t: "init", sessionId, model, label });
 
   function startClaude() {
-    const child = spawn("claude", claudeArgs(model, resume), { stdio: ["pipe", "pipe", "inherit"], cwd });
+    // VOIZE_NO_ANNOUNCE lets the user's Stop hook (done-announce.sh) skip the "finished" sound —
+    // we already speak the reply, so the chime is redundant for voizecode sessions.
+    const child = spawn("claude", claudeArgs(model, resume), { stdio: ["pipe", "pipe", "inherit"], cwd, env: { ...process.env, VOIZE_NO_ANNOUNCE: "1" } });
     claude = child; buf = ""; turnText = "";
     console.log(`[${sessionId}] spawned claude (${model}${resume ? " resume " + resume.slice(0, 8) : ""}) in ${cwd}`);
     child.stdout.on("data", (d) => { if (child === claude) onStdout(d); });

@@ -47,6 +47,8 @@ export function useVoize() {
   const [micError, setMicError] = useState("");
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);
+  const [thinkingSound, setThinkingSoundState] = useState(true); // ambient "thinking" shimmer
+  const thinkingSoundRef = useRef(true);
   const [speakingClip, setSpeakingClip] = useState<number | null>(null); // clip id currently being voiced
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]); // past sessions (browser)
   const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
@@ -85,6 +87,8 @@ export function useVoize() {
     setVoiceState(v); voiceRef.current = v;
     const savedMic = (typeof window !== "undefined" && localStorage.getItem(MIC_KEY)) || "";
     setMicId(savedMic); micIdRef.current = savedMic;
+    const ts = typeof window === "undefined" ? "1" : (localStorage.getItem("voize:thinkingSound") ?? "1");
+    setThinkingSoundState(ts !== "0"); thinkingSoundRef.current = ts !== "0";
   }, []);
 
   // List audio-input devices (labels only populate after mic permission is granted once).
@@ -127,7 +131,15 @@ export function useVoize() {
   }, []);
 
   // Ambient "thinking" tone while the active session is working (stops before the spoken reply).
-  useEffect(() => { if (thinking[activeId]) tone.current?.start(); else tone.current?.stop(); }, [thinking, activeId]);
+  useEffect(() => {
+    if (thinking[activeId] && thinkingSoundRef.current) tone.current?.start();
+    else tone.current?.stop();
+  }, [thinking, activeId, thinkingSound]);
+  const setThinkingSound = useCallback((on: boolean) => {
+    setThinkingSoundState(on); thinkingSoundRef.current = on;
+    try { localStorage.setItem("voize:thinkingSound", on ? "1" : "0"); } catch { /* quota */ }
+    if (!on) tone.current?.stop();
+  }, []);
 
   // ---- websocket ----
   const connect = useCallback(() => {
@@ -415,5 +427,6 @@ export function useVoize() {
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
     voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute, speakingClip,
     savedSessions, projects, requestSessions, openSession, newInProject, titles, copyDebug,
+    thinkingSound, setThinkingSound,
   };
 }

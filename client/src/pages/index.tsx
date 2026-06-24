@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check, Settings } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
@@ -82,10 +82,43 @@ function SessionBrowser({ projects, sessions, onProject, onSession, onClose }: {
   );
 }
 
+// A row in the settings modal with a toggle switch.
+function SettingRow({ title, desc, on, onChange }: { title: string; desc: string; on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-2">
+      <div>
+        <div className="text-sm font-medium">{title}</div>
+        <div className="text-xs text-muted-foreground">{desc}</div>
+      </div>
+      <button role="switch" aria-checked={on} onClick={() => onChange(!on)}
+        className={cn("relative h-6 w-11 shrink-0 rounded-full transition-colors", on ? "bg-primary" : "bg-muted")}>
+        <span className={cn("absolute top-0.5 h-5 w-5 rounded-full bg-background shadow transition-transform", on ? "translate-x-[22px]" : "translate-x-0.5")} />
+      </button>
+    </div>
+  );
+}
+
+function SettingsModal({ v, onClose }: { v: ReturnType<typeof useVoize>; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[12vh]" onClick={onClose}>
+      <div className="w-full max-w-md rounded-lg border bg-popover text-popover-foreground shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">Settings</h2>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
+        </div>
+        <div className="px-4 py-2">
+          <SettingRow title="Ambient thinking sound" desc="Soft shimmer while the agent is working." on={v.thinkingSound} onChange={v.setThinkingSound} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const v = useVoize();
   const [draft, setDraft] = useState("");
   const [browser, setBrowser] = useState(false);
+  const [settings, setSettings] = useState(false);
   const [copied, setCopied] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const openBrowser = () => { v.requestSessions(); setBrowser(true); };
@@ -119,6 +152,9 @@ export default function Home() {
           <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy debug info (project, chat, claude session id)"
             onClick={async () => { await v.copyDebug(); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>
             {copied ? <Check size={14} className="text-green-600" /> : <ClipboardCopy size={14} />}
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings" onClick={() => setSettings(true)}>
+            <Settings size={14} />
           </Button>
           <span className={v.connected ? "text-green-600 dark:text-green-400" : "text-destructive"}>
             {v.connected ? "connected" : "connecting…"}
@@ -236,6 +272,7 @@ export default function Home() {
           onClose={() => setBrowser(false)}
         />
       )}
+      {settings && <SettingsModal v={v} onClose={() => setSettings(false)} />}
     </main>
   );
 }
