@@ -7,7 +7,7 @@
     "dev:relay": "cd relay && deno task dev",
     "dev:client": "cd client && npm run dev",
     "dev:agent": "node --watch laptop/voizecode.mjs",
-    "app": "cd electron && npm start",
+    "app": "cd electron && npm run dev",
     "agent": "cd laptop && node voizecode.mjs",
     "setup": "cd laptop && npm install && cd ../client && npm install"
   },

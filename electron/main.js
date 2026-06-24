@@ -38,6 +38,17 @@ async function createWindow() {
   // open external links in the real browser, keep app routes in-app
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
 
+  // If the Next dev server restarts (HMR socket drops / page fails to load), reconnect the window.
+  win.webContents.on("did-fail-load", (_e, _code, _desc, url) => {
+    if (url && url.startsWith(CLIENT)) setTimeout(() => win.loadURL(CLIENT), 1000);
+  });
+  // Cmd/Ctrl+R = reload, Cmd/Ctrl+Alt+I = devtools (handy while iterating).
+  win.webContents.on("before-input-event", (_e, input) => {
+    const mod = input.meta || input.control;
+    if (mod && !input.alt && input.key.toLowerCase() === "r") win.webContents.reloadIgnoringCache();
+    if (mod && input.alt && input.key.toLowerCase() === "i") win.webContents.toggleDevTools();
+  });
+
   await win.loadURL("data:text/html,<body style='font-family:system-ui;background:%23111;color:%23eee;display:grid;place-items:center;height:100vh;margin:0'><div>Starting voizecode…</div></body>");
   ensureServices();
   if (await waitFor(CLIENT)) win.loadURL(CLIENT);
