@@ -43,7 +43,7 @@ export function useVoize() {
   const [interim, setInterim] = useState<Record<string, string>>({});
   const [thinking, setThinking] = useState<Record<string, boolean>>({});
   const [unread, setUnread] = useState<Record<string, boolean>>({});
-  const [rate, setRate] = useState(2.0);
+  const [rate, setRate] = useState(2.5);
   const [micError, setMicError] = useState("");
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);

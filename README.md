@@ -52,6 +52,18 @@ Open http://localhost:3030 in Chrome, hit **Start call**, talk. The agent runs o
 open/resume Claude Code sessions in any project via **+ New chat** — no need to launch it
 per-repo. To use it from your phone on the same wifi, open `http://<laptop-LAN-IP>:3030` in Safari.
 
+### `voize` command (start from anywhere)
+
+`bin/voize` starts the services (if needed), opens a chat in the **current directory**, and opens
+the web app. Add an alias: `alias voize="$HOME/CODE/voizecode/bin/voize"`, then run `voize` in any repo.
+
+### Desktop app (Electron)
+
+`npm run app` opens voizecode in its own window (own mic permission, droppable on any Space).
+First time: `cd electron && npm install`. If Electron's binary extracts incompletely (a known
+`@electron/get` issue with the framework symlinks), unzip the cached zip manually:
+`unzip -o ~/Library/Caches/electron/*/electron-*.zip -d node_modules/electron/dist && printf 'Electron.app/Contents/MacOS/Electron' > node_modules/electron/path.txt`.
+
 ## Tests
 
 ```bash
