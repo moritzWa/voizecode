@@ -74,7 +74,9 @@ function openDeepgram(s: Session) {
   dg.onopen = () => { console.log(`[relay:${s.id}] deepgram connected`); flushDg(s); };
   dg.onmessage = (e) => {
     const m = JSON.parse(e.data);
-    if (m.type === "UtteranceEnd") { deliverUtterance(s); return; }
+    // Ignore Deepgram's UtteranceEnd (fires on a ~1.2s pause) — it splits a sentence when you
+    // pause mid-thought. Delivery is driven solely by the UTTER_GAP_MS debounce below.
+    if (m.type === "UtteranceEnd") return;
     const text = m.channel?.alternatives?.[0]?.transcript;
     if (!text) return;
     if (m.is_final) {
@@ -276,6 +278,7 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
     case "turn_end": narrateFinal(s, (m.fullText as string) ?? ""); break;
     case "sessions_list": toClient(s.id, { t: "sessions_list", sessions: m.sessions, projects: m.projects }); break;
     case "history": toClient(s.id, { t: "history", messages: m.messages }); break;
+    case "meta": toClient(s.id, { t: "meta", claudeSessionId: m.claudeSessionId, cwd: m.cwd }); break;
     case "exit": console.log(`[relay:${s.id}] agent exited`, m.code); break;
   }
 }

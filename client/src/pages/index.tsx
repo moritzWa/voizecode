@@ -1,7 +1,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
@@ -86,6 +86,7 @@ export default function Home() {
   const v = useVoize();
   const [draft, setDraft] = useState("");
   const [browser, setBrowser] = useState(false);
+  const [copied, setCopied] = useState(false);
   const openBrowser = () => { v.requestSessions(); setBrowser(true); };
 
   return (
@@ -112,6 +113,10 @@ export default function Home() {
               {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy debug info (project, chat, claude session id)"
+            onClick={async () => { await v.copyDebug(); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>
+            {copied ? <Check size={14} className="text-green-600" /> : <ClipboardCopy size={14} />}
+          </Button>
           <span className={v.connected ? "text-green-600 dark:text-green-400" : "text-destructive"}>
             {v.connected ? "connected" : "connecting…"}
           </span>
@@ -121,7 +126,7 @@ export default function Home() {
 
       {/* session tabs attached to the chat panel (no gap) */}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-end gap-1 overflow-x-auto">
+        <div className="flex items-end gap-1 overflow-x-auto overflow-y-hidden pt-1">
           {v.sessions.length === 0 && <span className="px-1 pb-2 text-xs text-muted-foreground">no sessions — start the laptop agent</span>}
           {v.sessions.map((s) => {
             const activeTab = s.sessionId === v.activeId;

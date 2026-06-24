@@ -123,7 +123,9 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
     }
   }
   function handle(m) {
-    if (m.type === "stream_event" && m.event?.delta?.text) {
+    if (m.type === "system" && m.subtype === "init" && m.session_id) {
+      send({ t: "meta", claudeSessionId: m.session_id, cwd }); // for the "copy debug info" button
+    } else if (m.type === "stream_event" && m.event?.delta?.text) {
       turnText += m.event.delta.text;
       send({ t: "delta", text: m.event.delta.text });
     } else if (m.type === "assistant" && Array.isArray(m.message?.content)) {
@@ -147,19 +149,26 @@ function toolSummary(block) {
   switch (block.name) {
     case "Edit": case "Write": return `editing ${short(i.file_path)}`;
     case "Read": return `reading ${short(i.file_path)}`;
-    case "Bash": return `running ${String(i.command || "").trim().split(/\s+/)[0] || "a command"}`;
+    // Prefer Claude's human description ("Run the tests"); fall back to the command's first word.
+    case "Bash": return String(i.description || "").trim() || `running ${firstWord(i.command) || "a command"}`;
     case "Grep": case "Glob": return `searching for ${i.pattern || ""}`;
     default: return `using ${block.name}`;
   }
 }
 const short = (p) => (p ? String(p).split("/").slice(-1)[0] : "");
+// First real command word, skipping leading comment lines (so we don't show "running #").
+function firstWord(cmd) {
+  const lines = String(cmd || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const line = lines.find((l) => !l.startsWith("#")) || lines[0] || "";
+  return line.split(/\s+/)[0] || "";
+}
 const READONLY_BASH = new Set(["ls", "find", "cat", "grep", "rg", "fd", "head", "tail", "wc", "pwd",
   "echo", "which", "tree", "stat", "du", "df", "env", "sed", "awk", "cd", "git"]);
 function toolSpeakable(block) {
   const i = block.input || {};
   switch (block.name) {
     case "Edit": case "Write": case "NotebookEdit": case "Task": case "WebSearch": case "WebFetch": return true;
-    case "Bash": return !READONLY_BASH.has(String(i.command || "").trim().split(/\s+/)[0]);
+    case "Bash": return !READONLY_BASH.has(firstWord(i.command));
     default: return false;
   }
 }
