@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# `voize` — from any directory: ensure the voizecode services are running, open a chat in the
+# CURRENT directory, and open the web app. Type `voize` in a repo and start talking to it.
+VOIZE_DIR="${VOIZE_DIR:-$HOME/CODE/voizecode}"
+TARGET="$PWD"
+
+# Start relay + client + agent once if the relay isn't already up.
+if ! curl -s -o /dev/null http://localhost:8787 2>/dev/null; then
+  echo "voize: starting services…"
+  ( cd "$VOIZE_DIR" && nohup npm run dev >/tmp/voizecode.log 2>&1 & )
+  for i in $(seq 1 60); do
+    curl -s -o /dev/null http://localhost:8787 2>/dev/null && curl -s -o /dev/null http://localhost:3030 2>/dev/null && break
+    sleep 1
+  done
+fi
+
+# Open a chat in the current directory (a tab for this codebase).
+node "$VOIZE_DIR/bin/new-chat.mjs" "$TARGET" || true
+
+# Open the web app.
+( open -a "Google Chrome" "http://localhost:3030" >/dev/null 2>&1 || open "http://localhost:3030" >/dev/null 2>&1 ) || true
+echo "voize → http://localhost:3030  (chat: $(basename "$TARGET"))"
