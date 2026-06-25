@@ -35,7 +35,8 @@ export class ClipPlayer {
   private speaking = false;
   private paused = false;
   // onClip(id) when a clip starts playing, onClip(null) when nothing is playing (for UI highlight).
-  constructor(private onSpeaking?: SpeakingCb, private onClip?: (clip: number | null) => void) {}
+  // onProgress(id, t) on each timeupdate of the playing clip (media-time seconds, for word highlight).
+  constructor(private onSpeaking?: SpeakingCb, private onClip?: (clip: number | null) => void, private onProgress?: (clip: number, t: number) => void) {}
 
   isPlaying() { return !!this.current; }
   isPaused() { return this.paused; }
@@ -100,6 +101,7 @@ export class ClipPlayer {
     }
     audio.addEventListener("ended", () => this.onEnded(clip!));
     audio.addEventListener("error", () => this.onEnded(clip!));
+    audio.addEventListener("timeupdate", () => { if (this.current?.id === id) this.onProgress?.(id, audio.currentTime); });
     this.building.set(id, clip);
     this.order.push(id);
     this.startNext();

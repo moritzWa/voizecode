@@ -114,6 +114,22 @@ function SettingsModal({ v, onClose }: { v: ReturnType<typeof useVoize>; onClose
   );
 }
 
+// Speechify-style: render a spoken line word-by-word, highlighting the word at playback time `t`.
+function SpokenWords({ words, t, fallback }: { words: { text: string; start: number }[]; t: number; fallback: string }) {
+  if (!words.length) return <>{fallback}</>;
+  let active = -1;
+  for (let i = 0; i < words.length; i++) { if (words[i].start <= t) active = i; else break; }
+  return (
+    <>
+      {words.map((w, i) => (
+        <span key={i} className={i === active ? "rounded bg-primary/30 box-decoration-clone" : undefined}>
+          {w.text}{i < words.length - 1 ? " " : ""}
+        </span>
+      ))}
+    </>
+  );
+}
+
 export default function Home() {
   const v = useVoize();
   const [draft, setDraft] = useState("");
@@ -197,14 +213,21 @@ export default function Home() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg rounded-tl-none border bg-card p-3">
-          {v.lines.map((l, i) => (
-            l.kind === "agent" ? <AgentMessage key={i} text={l.text} /> :
-            <div key={i} className={cn("break-words",
+          {v.lines.map((l, i) => {
+            if (l.kind === "agent") return <AgentMessage key={i} text={l.text} />;
+            if (l.kind === "speech") {
+              const active = l.clip != null && l.clip === v.speakingClip;
+              const words = l.clip != null ? v.clipWords[l.clip] : undefined;
+              return (
+                <div key={i} className={cn("break-words rounded-lg px-3 py-1.5 text-sm transition-colors", active ? "bg-accent" : "bg-muted")}>
+                  {active && words ? <SpokenWords words={words} t={v.speakingTime} fallback={l.text} /> : l.text}
+                </div>
+              );
+            }
+            return <div key={i} className={cn("break-words",
               l.kind === "user" ? "self-end rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground" :
-              l.kind === "speech" ? cn("rounded-lg px-3 py-1.5 text-sm transition-colors",
-                l.clip != null && l.clip === v.speakingClip ? "bg-accent ring-1 ring-primary/40" : "bg-muted") :
-              "px-1 text-xs italic text-muted-foreground")}>{l.text}</div>
-          ))}
+              "px-1 text-xs italic text-muted-foreground")}>{l.text}</div>;
+          })}
           {v.interim && <div className="self-end px-3 text-sm text-muted-foreground">{v.interim}…</div>}
         </div>
       </div>

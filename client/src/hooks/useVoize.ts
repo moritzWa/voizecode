@@ -50,6 +50,8 @@ export function useVoize() {
   const [thinkingSound, setThinkingSoundState] = useState(true); // ambient "thinking" shimmer
   const thinkingSoundRef = useRef(true);
   const [speakingClip, setSpeakingClip] = useState<number | null>(null); // clip id currently being voiced
+  const [speakingTime, setSpeakingTime] = useState(0);                   // playback time of the active clip (s)
+  const [clipWords, setClipWords] = useState<Record<number, { text: string; start: number }[]>>({}); // per-clip word timings
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]); // past sessions (browser)
   const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
   const [metas, setMetas] = useState<Record<string, { claudeSessionId: string; cwd: string }>>({}); // debug info per chat
@@ -118,7 +120,11 @@ export function useVoize() {
   // ---- audio playback: streamed clips via MediaSource (active session only) ----
   const markSpeaking = (b: boolean) => { (window as unknown as { __voizeSpeaking?: boolean }).__voizeSpeaking = b; };
   useEffect(() => {
-    const p = new ClipPlayer(markSpeaking, setSpeakingClip);
+    const p = new ClipPlayer(
+      markSpeaking,
+      (clip) => { setSpeakingClip(clip); setSpeakingTime(0); }, // new clip -> reset word highlight
+      (_clip, t) => setSpeakingTime(t),                          // playback progress -> advance highlight
+    );
     p.setRate(rateRef.current); // apply the initial speed (default 2x) before the first clip plays
     player.current = p;
     tone.current = new ThinkingTone();
@@ -197,6 +203,7 @@ export function useVoize() {
         case "model": setSessions((p) => p.map((s) => s.sessionId === sid ? { ...s, model: normModel(m.model) } : s)); break;
         case "sessions_list": setSavedSessions(m.sessions || []); setProjects(m.projects || []); break;
         case "meta": setMetas((p) => ({ ...p, [sid]: { claudeSessionId: m.claudeSessionId, cwd: m.cwd } })); break;
+        case "words": setClipWords((p) => ({ ...p, [m.clip]: m.words })); break;
         case "history": { // resumed transcript -> fill the viewer
           const lines: Line[] = (m.messages || []).map((mm: { role: string; text: string }) =>
             ({ kind: mm.role === "user" ? "user" : "agent", text: mm.text }));
@@ -428,6 +435,6 @@ export function useVoize() {
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
     voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute, speakingClip,
     savedSessions, projects, requestSessions, openSession, newInProject, titles, copyDebug,
-    thinkingSound, setThinkingSound,
+    thinkingSound, setThinkingSound, speakingTime, clipWords,
   };
 }

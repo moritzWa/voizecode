@@ -43,6 +43,7 @@ export type AgentToRelay =
   | { t: "history"; sessionId: string; messages: HistoryMsg[] }              // resumed transcript for the viewer
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
+export interface SpokenWord { text: string; start: number } // start = media-time seconds
 export interface SavedSession { id: string; cwd: string; label: string; preview: string; mtime: number }
 export interface HistoryMsg { role: "user" | "assistant"; text: string }
 export interface ProjectInfo { cwd: string; label: string; count: number; mtime: number }
@@ -53,6 +54,7 @@ export type RelayToClient =
   | { t: "user_echo"; sessionId: string; text: string; seq: number }     // committed user turn
   | { t: "status"; sessionId: string; text: string; seq: number }        // progress ("editing auth.ts")
   | { t: "speech_text"; sessionId: string; text: string; seq: number; clip: number } // text being spoken (clip = its audio id)
+  | { t: "words"; sessionId: string; clip: number; words: SpokenWord[]; seq: number } // per-word start times (ElevenLabs) for highlight
   | { t: "utterance_discarded"; sessionId: string }                      // a backchannel/noise was ignored -> resume audio
   // Audio streams as ordered mp3 byte chunks grouped by `clip` (one spoken utterance),
   // so the client can append to a MediaSource and start playing before synthesis finishes.

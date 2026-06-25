@@ -11,11 +11,13 @@ const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY") ?? "";
 const NARRATE_MODEL = Deno.env.get("VOIZE_NARRATE_MODEL") ?? "gpt-4.1-nano";
 const TTS_SPEED = Number(Deno.env.get("VOIZE_SPEED") ?? 1.8);
 const TTS_SR = 24000;
-// TTS provider: deepgram (Aura-2, ~75ms first-byte) by default, openai (tts-1) fallback.
-// Speed is applied client-side (playbackRate slider), so neither needs a speed param here.
-// Path A default: OpenAI streams mp3 progressively (low latency, MSE-friendly).
-// VOIZE_TTS=deepgram falls back to a single whole-mp3 blob (no progressive streaming).
-const TTS_PROVIDER = (Deno.env.get("VOIZE_TTS") ?? "openai").toLowerCase();
+const EL_KEY = Deno.env.get("ELEVENLABS_API_KEY") ?? "";
+const EL_VOICE = Deno.env.get("VOIZE_EL_VOICE") ?? "EXAVITQu4vr4xnSDxMaL"; // Sarah (premade)
+const EL_MODEL = Deno.env.get("VOIZE_EL_MODEL") ?? "eleven_flash_v2_5";
+// TTS provider: elevenlabs (per-word timestamps -> Speechify highlight) when its key is set,
+// else openai (streams mp3) , else deepgram. OpenAI is the fallback if the primary errors.
+// Speed is applied client-side (playbackRate, pitch-preserved); timestamps are in media-time so it stays synced.
+const TTS_PROVIDER = (Deno.env.get("VOIZE_TTS") ?? (EL_KEY ? "elevenlabs" : "openai")).toLowerCase();
 const TTS_VOICE = Deno.env.get("VOIZE_TTS_VOICE") ?? "aura-2-thalia-en";
 const UTTER_GAP_MS = Number(Deno.env.get("VOIZE_UTTER_GAP_MS") ?? 2200);
 // Spoken tool updates are throttled so a busy turn doesn't chatter — the first
@@ -181,19 +183,46 @@ async function speak(s: Session, text: string) {
     if (!r.ok) throw new Error(`deepgram tts ${r.status}`);
     emit(new Uint8Array(await r.arrayBuffer()));
   };
+  // ElevenLabs with per-character timestamps -> derive word start times for Speechify-style highlight.
+  const elevenLabs = async () => {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${EL_VOICE}/with-timestamps?output_format=mp3_44100_128`, {
+      method: "POST",
+      headers: { "xi-api-key": EL_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ text, model_id: EL_MODEL }),
+    });
+    if (!r.ok) throw new Error(`elevenlabs tts ${r.status}`);
+    const j = await r.json();
+    if (j.audio_base64) { any = true; toClient(s.id, { t: "audio_chunk", clip, b64: j.audio_base64 as string, seq: nextSeq(), format: fmt }); }
+    const words = j.alignment ? wordsFromAlignment(j.alignment) : [];
+    if (words.length) toClient(s.id, { t: "words", clip, words, seq: nextSeq() });
+  };
 
-  // Path A default: stream mp3 from OpenAI (progressive). VOIZE_TTS=deepgram -> whole-blob.
-  const streamFirst = TTS_PROVIDER !== "deepgram" && !!OPENAI_KEY;
+  const streamFirst = TTS_PROVIDER !== "deepgram" && TTS_PROVIDER !== "elevenlabs" && !!OPENAI_KEY;
   try {
-    if (streamFirst) await streamOpenAI();
+    if (TTS_PROVIDER === "elevenlabs" && EL_KEY) await elevenLabs();
+    else if (streamFirst) await streamOpenAI();
     else if (DEEPGRAM_KEY) await wholeDeepgram();
     else if (OPENAI_KEY) await streamOpenAI();
   } catch (e) {
-    console.log("[relay] tts failed, trying fallback:", (e as Error).message);
-    try { if (streamFirst && DEEPGRAM_KEY) await wholeDeepgram(); else if (OPENAI_KEY) await streamOpenAI(); }
+    console.log("[relay] tts failed, falling back to OpenAI:", (e as Error).message);
+    try { if (OPENAI_KEY) await streamOpenAI(); else if (DEEPGRAM_KEY) await wholeDeepgram(); }
     catch (e2) { console.log("[relay] tts fallback failed:", (e2 as Error).message); }
   }
   if (any) toClient(s.id, { t: "audio_end", clip, seq: nextSeq() });
+}
+
+// Group ElevenLabs per-character timestamps into word start times (media-time seconds).
+function wordsFromAlignment(a: { characters?: string[]; character_start_times_seconds?: number[] }) {
+  const chars = a.characters ?? [];
+  const starts = a.character_start_times_seconds ?? [];
+  const words: { text: string; start: number }[] = [];
+  let cur = "", curStart = 0;
+  for (let i = 0; i < chars.length; i++) {
+    if (/\s/.test(chars[i])) { if (cur) { words.push({ text: cur, start: curStart }); cur = ""; } }
+    else { if (!cur) curStart = starts[i] ?? 0; cur += chars[i]; }
+  }
+  if (cur) words.push({ text: cur, start: curStart });
+  return words;
 }
 
 const NARRATE_SYSTEM =
@@ -343,4 +372,4 @@ Deno.serve({ port: PORT }, (req) => {
   };
   return response;
 });
-console.log(`[relay] listening on :${PORT}  (stt=${!!DEEPGRAM_KEY} tts=${TTS_PROVIDER}/${TTS_VOICE} narrate=${OPENAI_KEY ? NARRATE_MODEL : "off"})`);
+console.log(`[relay] listening on :${PORT}  (stt=${!!DEEPGRAM_KEY} tts=${TTS_PROVIDER}/${TTS_PROVIDER === "elevenlabs" ? EL_VOICE : TTS_VOICE} narrate=${OPENAI_KEY ? NARRATE_MODEL : "off"})`);
