@@ -1,6 +1,24 @@
 # voizecode
 
-Talk to Claude Code on your laptop and hear it talk back — keep coding by voice while you walk away.
+**Talk to your codebase from anywhere.** Your repository, as a phone call.
+
+Understand code while walking, review a PR while commuting, make a change away from your keyboard —
+voizecode turns Claude Code (Codex next) into something that feels like a phone call with your repo.
+
+The killer feature isn't voice *input*, it's voice *output*: instead of reading pages of agent logs,
+a narrator continuously summarizes what it's doing — *"I found the likely bug… there are no tests for
+it, so I'll add one first."* That's pair-programming, not terminal-watching.
+
+### V1 workflows (what it's for)
+- Explain this PR · Explain this file · Find where something happens · Make a simple change · Narrate progress
+
+### Roadmap
+- [x] Desktop: voice loop, narrator, multi-chat, cross-directory session browser, PR context, Electron app
+- [x] Word-level (Speechify-style) highlighting synced to speech
+- [ ] Mobile: pair the phone to the desktop via QR/token, voice in/out over the relay (desktop stays online)
+- [ ] Playback controls by voice (pause / continue / slower / "explain that again")
+- [ ] Selectable engines (Codex CLI alongside Claude) + faster narrator path
+- [ ] One-command install + 30-second demo
 
 ## Architecture (3 tiers, relay in the middle)
 
