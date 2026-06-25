@@ -54,6 +54,7 @@ export function useVoize() {
   const [clipWords, setClipWords] = useState<Record<number, { text: string; start: number }[]>>({}); // per-clip word timings
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]); // past sessions (browser)
   const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
+  const [prs, setPrs] = useState<{ number: number; title: string; url: string; createdAt: string; isDraft: boolean }[]>([]);
   const [metas, setMetas] = useState<Record<string, { claudeSessionId: string; cwd: string }>>({}); // debug info per chat
   const [voice, setVoiceState] = useState("alloy");
   const voiceRef = useRef(voice);
@@ -204,6 +205,7 @@ export function useVoize() {
         case "sessions_list": setSavedSessions(m.sessions || []); setProjects(m.projects || []); break;
         case "meta": setMetas((p) => ({ ...p, [sid]: { claudeSessionId: m.claudeSessionId, cwd: m.cwd } })); break;
         case "words": setClipWords((p) => ({ ...p, [m.clip]: m.words })); break;
+        case "prs": setPrs(m.prs || []); break;
         case "history": { // resumed transcript -> fill the viewer
           const lines: Line[] = (m.messages || []).map((mm: { role: string; text: string }) =>
             ({ kind: mm.role === "user" ? "user" : "agent", text: mm.text }));
@@ -376,6 +378,7 @@ export function useVoize() {
   const newSession = useCallback(() => { wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current }); }, []);
   // Session browser: fetch past sessions/projects, resume one, or start fresh in a project dir.
   const requestSessions = useCallback(() => send({ t: "list_sessions", sessionId: activeRef.current }), []);
+  const requestPRs = useCallback(() => send({ t: "list_prs", sessionId: activeRef.current }), []);
   const openSession = useCallback((id: string, cwd: string, label: string) => {
     wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, resumeId: id, label });
   }, []);
@@ -435,6 +438,6 @@ export function useVoize() {
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
     voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute, speakingClip,
     savedSessions, projects, requestSessions, openSession, newInProject, titles, copyDebug,
-    thinkingSound, setThinkingSound, speakingTime, clipWords,
+    thinkingSound, setThinkingSound, speakingTime, clipWords, prs, requestPRs,
   };
 }

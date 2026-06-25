@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check, Settings } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check, Settings, GitPullRequest } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
@@ -130,11 +130,38 @@ function SpokenWords({ words, t, fallback }: { words: { text: string; start: num
   );
 }
 
+// Modal listing the chat repo's authored PRs (incl. drafts); pick one to talk through it.
+function PRModal({ v, onPick, onClose }: { v: ReturnType<typeof useVoize>; onPick: (pr: { number: number; title: string; url: string }) => void; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[10vh]" onClick={onClose}>
+      <div className="flex max-h-[70vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">Talk through a PR</h2>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
+        </div>
+        <div className="overflow-y-auto p-2">
+          {v.prs.length === 0 && <div className="px-2 py-3 text-xs text-muted-foreground">No authored PRs found in this repo (needs <code>gh</code> auth + a GitHub remote).</div>}
+          {v.prs.map((p) => (
+            <button key={p.number} onClick={() => onPick(p)} className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent">
+              <GitPullRequest size={15} className="mt-0.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">#{p.number} {p.title}</span>
+                <span className="block truncate text-xs text-muted-foreground">{p.isDraft ? "draft · " : ""}{new Date(p.createdAt).toLocaleDateString()}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const v = useVoize();
   const [draft, setDraft] = useState("");
   const [browser, setBrowser] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [prModal, setPrModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const openBrowser = () => { v.requestSessions(); setBrowser(true); };
@@ -270,6 +297,8 @@ export default function Home() {
       )}
 
       <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <Button type="button" variant="outline" size="icon" title="Talk through one of your PRs"
+          onClick={() => { v.requestPRs(); setPrModal(true); }}><GitPullRequest size={15} /></Button>
         <Textarea ref={taRef} rows={1} value={draft}
           onChange={(e) => { setDraft(e.target.value); growInput(e.currentTarget); }}
           placeholder={v.thinking && !draft.trim() ? "running — type to steer, or stop →" : "or type…  (Shift+Enter = newline)"}
@@ -296,6 +325,8 @@ export default function Home() {
         />
       )}
       {settings && <SettingsModal v={v} onClose={() => setSettings(false)} />}
+      {prModal && <PRModal v={v} onClose={() => setPrModal(false)}
+        onPick={(p) => { v.sendText(`Let's walk through my PR #${p.number}: "${p.title}" (${p.url}). Read the diff with gh and explain what it does, then flag anything worth a second look.`); setPrModal(false); }} />}
     </main>
   );
 }

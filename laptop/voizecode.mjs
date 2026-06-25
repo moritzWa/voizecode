@@ -7,7 +7,7 @@
 //   client (mic) -> relay (STT) --user_message--> chat --> claude stdin
 //   claude stdout --delta/tool_use/turn_end--> chat --> relay (narrate+TTS) -> client
 
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
@@ -93,6 +93,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
       else if (m.t === "reset") { resetSession(); }
       else if (m.t === "new_chat") { createChat({ cwd: m.cwd, resumeId: m.resumeId, label: m.label }); }
       else if (m.t === "list_sessions") { send({ t: "sessions_list", ...scanSessions() }); }
+      else if (m.t === "list_prs") { listPRs(cwd, (prs) => send({ t: "prs", prs })); }
       else if (m.t === "close") { // kill this chat for good (UI closed the tab)
         closed = true;
         clearTimers();
@@ -252,6 +253,19 @@ function scanSessions() {
   }
   const projects = [...byCwd.values()].sort((a, b) => b.mtime - a.mtime).slice(0, 40);
   return { sessions: sessions.slice(0, 60), projects };
+}
+
+// List the current user's PRs in this chat's repo (incl. drafts), newest first, via gh.
+function listPRs(cwd, cb) {
+  execFile("gh", ["pr", "list", "--author", "@me", "--state", "all", "--limit", "30",
+    "--json", "number,title,url,createdAt,isDraft"],
+    { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      if (err) { console.log(`[prs] gh error: ${err.message.split("\n")[0]}`); return cb([]); }
+      let arr = [];
+      try { arr = JSON.parse(stdout); } catch { /* noop */ }
+      arr.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      cb(arr.map((p) => ({ number: p.number, title: p.title, url: p.url, createdAt: p.createdAt, isDraft: !!p.isDraft })));
+    });
 }
 
 // ---- chat registry ----

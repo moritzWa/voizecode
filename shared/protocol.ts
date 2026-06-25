@@ -28,6 +28,7 @@ export type ClientToRelay =
   | { t: "new_session"; sessionId: string; cwd?: string; resumeId?: string; label?: string }
   | { t: "close_session"; sessionId: string }       // close a chat (kills its claude subprocess)
   | { t: "list_sessions"; sessionId: string }       // ask the agent for past sessions + projects
+  | { t: "list_prs"; sessionId: string }            // ask the agent for the chat repo's authored PRs
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
 // ---- agent (laptop) -> relay ----
@@ -40,6 +41,7 @@ export type AgentToRelay =
   | { t: "exit"; code: number }
   | { t: "meta"; claudeSessionId: string; cwd: string }                      // claude session uuid + cwd (debug)
   | { t: "sessions_list"; sessions: SavedSession[]; projects: ProjectInfo[] } // past sessions + project dirs
+  | { t: "prs"; prs: PullRequest[] }                                         // authored PRs in the chat's repo
   | { t: "history"; sessionId: string; messages: HistoryMsg[] }              // resumed transcript for the viewer
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
@@ -47,6 +49,7 @@ export interface SpokenWord { text: string; start: number } // start = media-tim
 export interface SavedSession { id: string; cwd: string; label: string; preview: string; mtime: number }
 export interface HistoryMsg { role: "user" | "assistant"; text: string }
 export interface ProjectInfo { cwd: string; label: string; count: number; mtime: number }
+export interface PullRequest { number: number; title: string; url: string; createdAt: string; isDraft: boolean }
 
 // ---- relay -> client ---- (all carry sessionId)
 export type RelayToClient =
@@ -66,6 +69,7 @@ export type RelayToClient =
   | { t: "model"; sessionId: string; model: string }                     // current claude model
   | { t: "sessions"; sessions: SessionInfo[] }                           // active session list (tabs)
   | { t: "sessions_list"; sessions: SavedSession[]; projects: ProjectInfo[] } // past sessions + projects (browser)
+  | { t: "prs"; prs: PullRequest[] }                                     // authored PRs (PR-context modal)
   | { t: "history"; sessionId: string; messages: HistoryMsg[] }          // resumed transcript for the viewer
   | { t: "meta"; sessionId: string; claudeSessionId: string; cwd: string }   // claude session uuid + cwd (debug)
   | { t: "pong" };                                                       // heartbeat reply
