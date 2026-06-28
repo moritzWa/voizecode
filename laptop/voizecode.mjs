@@ -11,7 +11,8 @@ import { spawn, execFile } from "node:child_process";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
-import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync } from "node:fs";
+import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
 const RELAY_URL = process.env.VOIZE_RELAY_URL || "ws://localhost:8787";
@@ -31,15 +32,18 @@ const claudeArgs = (m, resumeId) => [
 
 // One self-contained chat: its own claude process (in `cwd`, optionally resuming a session)
 // + its own relay websocket. The relay keys sessions by socket, so N chats = N sockets.
-function startChat(sessionId, label, initialModel, cwd, resumeId) {
+function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "claude") {
   let model = initialModel;
   let resume = resumeId || null;
-  const history = resume ? buildHistory(resume) : null; // prior transcript to show in the viewer
+  const isCodex = engine === "codex";
+  const history = !isCodex && resume ? buildHistory(resume) : null; // prior transcript to show in the viewer
   let claude = null, buf = "", turnText = "";
+  let liveSessionId = resume || null; // the Claude session id currently being written (for forking)
+  let codexProc = null, codexThread = isCodex ? resume : null; // codex: per-turn `exec`, resume by thread id
   let ws = null, hbTimer = null, wdTimer = null, retry = 0, closed = false;
 
   const send = (m) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ ...m, sessionId }));
-  const announce = () => send({ t: "init", sessionId, model, label });
+  const announce = () => send({ t: "init", sessionId, model: isCodex ? "codex" : model, label, engine });
 
   function startClaude() {
     // VOIZE_NO_ANNOUNCE lets the user's Stop hook (done-announce.sh) skip the "finished" sound —
@@ -58,16 +62,81 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
     announce();
   }
   function resetSession() {
+    if (isCodex) { codexThread = null; try { codexProc?.kill("SIGINT"); } catch { /* gone */ } codexProc = null; announce(); return; }
     console.log(`[${sessionId}] reset (fresh claude context)`);
     resume = null; // new chat = drop any resumed session
     const old = claude; startClaude(); old?.stdin.end(); old?.kill("SIGINT");
     announce();
   }
 
-  const pushTurn = (text) =>
+  // Fork this chat at a turn boundary: copy the live session's transcript up to (but not
+  // including) the userIndex-th user turn into a new session id, then spawn a chat resuming it.
+  // Claude continues with the truncated context; the client sends the (edited) message next.
+  function forkChat(userIndex, forkLabel) {
+    if (isCodex) return; // Claude-only
+    const id = liveSessionId;
+    if (!id) { console.log(`[${sessionId}] fork: no live session id yet`); return; }
+    const root = join(homedir(), ".claude", "projects");
+    let file = null;
+    try { for (const d of readdirSync(root)) { const f = join(root, d, id + ".jsonl"); try { statSync(f); file = f; break; } catch { /* not here */ } } } catch { return; }
+    if (!file) { console.log(`[${sessionId}] fork: no transcript for ${id}`); return; }
+    let lines;
+    try { lines = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()); } catch { return; }
+    let count = 0, cut = -1; // line index of the userIndex-th real user turn
+    for (let i = 0; i < lines.length; i++) {
+      let m; try { m = JSON.parse(lines[i]); } catch { continue; }
+      if (m.isMeta || m.isSidechain || m.type !== "user" || !m.message?.content) continue;
+      const text = firstUserText(m.message.content).trim();
+      const isToolResult = Array.isArray(m.message.content) && m.message.content[0]?.tool_use_id;
+      if (!text || isToolResult || /^<(local-command|command-)/.test(text)) continue;
+      if (count === userIndex) { cut = i; break; }
+      count++;
+    }
+    if (cut <= 0) { console.log(`[${sessionId}] fork: couldn't locate user turn ${userIndex}`); return; }
+    const newId = randomUUID();
+    const dest = join(file.slice(0, file.lastIndexOf("/")), newId + ".jsonl");
+    try { writeFileSync(dest, lines.slice(0, cut).join("\n") + "\n"); }
+    catch (e) { console.log(`[${sessionId}] fork write failed:`, e.message); return; }
+    console.log(`[${sessionId}] forked at user turn ${userIndex} -> ${newId.slice(0, 8)} (${cut} lines kept)`);
+    createChat({ cwd, resumeId: newId, label: forkLabel || `${label} ↶`, engine: "claude" });
+  }
+
+  // --- Codex engine: one `codex exec` per turn, resuming by thread id (prompt via stdin) ---
+  function codexTurn(text) {
+    const flags = ["--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"];
+    // `exec resume` uses the session's recorded cwd and rejects -C; a fresh `exec` needs -C.
+    const args = codexThread
+      ? ["exec", "resume", codexThread, ...flags, "-"]
+      : ["exec", ...flags, "-C", cwd, "-"];
+    const proc = spawn("codex", args, { stdio: ["pipe", "pipe", "inherit"] });
+    codexProc = proc; buf = ""; turnText = "";
+    console.log(`[${sessionId}] codex ${codexThread ? "resume " + codexThread.slice(0, 8) : "new"} in ${cwd}`);
+    proc.stdin.write(text); proc.stdin.end();
+    proc.stdout.on("data", (d) => { if (proc === codexProc) onCodexStdout(d); });
+    proc.on("exit", () => { if (proc === codexProc) { send({ t: "turn_end", fullText: turnText.trim() }); codexProc = null; } });
+  }
+  function onCodexStdout(d) {
+    buf += d.toString();
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      if (!line.trim() || line[0] !== "{") continue;
+      let m; try { m = JSON.parse(line); } catch { continue; }
+      if (m.type === "thread.started" && m.thread_id) { codexThread = m.thread_id; send({ t: "meta", claudeSessionId: m.thread_id, cwd }); }
+      else if (m.type === "item.completed" && m.item) {
+        const it = m.item;
+        if (it.type === "agent_message" && it.text) { turnText += it.text; send({ t: "delta", text: it.text }); }
+        else if (it.type !== "reasoning") send({ t: "tool_use", name: it.type, summary: codexToolSummary(it), speak: ["file_change", "web_search", "mcp_tool_call"].includes(it.type) });
+      }
+      // turn.completed is covered by proc exit -> turn_end
+    }
+  }
+
+  const pushTurn = isCodex ? codexTurn : (text) =>
     claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
-  const interrupt = () =>
-    claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
+  const interrupt = isCodex
+    ? () => { try { codexProc?.kill("SIGINT"); } catch { /* gone */ } }
+    : () => claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
 
   function connect() {
     const sock = new WebSocket(RELAY_URL);
@@ -91,9 +160,10 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
       else if (m.t === "interrupt") { interrupt(); }
       else if (m.t === "set_model") { switchModel(m.model); }
       else if (m.t === "reset") { resetSession(); }
-      else if (m.t === "new_chat") { createChat({ cwd: m.cwd, resumeId: m.resumeId, label: m.label }); }
+      else if (m.t === "new_chat") { createChat({ cwd: m.cwd, resumeId: m.resumeId, label: m.label, engine: m.engine }); }
+      else if (m.t === "fork") { forkChat(m.userIndex, m.label); }
       else if (m.t === "list_sessions") { send({ t: "sessions_list", ...scanSessions() }); }
-      else if (m.t === "list_prs") { listPRs(cwd, (prs) => send({ t: "prs", prs })); }
+      else if (m.t === "list_prs") { listPRs(cwd, m.scope, (prs) => send({ t: "prs", prs })); }
       else if (m.t === "close") { // kill this chat for good (UI closed the tab)
         closed = true;
         clearTimers();
@@ -127,6 +197,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
   }
   function handle(m) {
     if (m.type === "system" && m.subtype === "init" && m.session_id) {
+      liveSessionId = m.session_id;
       send({ t: "meta", claudeSessionId: m.session_id, cwd }); // for the "copy debug info" button
     } else if (m.type === "stream_event" && m.event?.delta?.text) {
       turnText += m.event.delta.text;
@@ -141,9 +212,20 @@ function startChat(sessionId, label, initialModel, cwd, resumeId) {
     }
   }
 
-  startClaude();
+  if (!isCodex) startClaude(); // codex spawns per-turn, not persistently
   connect();
-  return { sessionId, kill: () => { try { claude?.kill("SIGINT"); } catch { /* noop */ } try { ws?.close(); } catch { /* noop */ } } };
+  return { sessionId, kill: () => { try { claude?.kill("SIGINT"); } catch { /* noop */ } try { codexProc?.kill("SIGINT"); } catch { /* noop */ } try { ws?.close(); } catch { /* noop */ } } };
+}
+
+// Short status line for a Codex tool/event item.
+function codexToolSummary(it) {
+  switch (it.type) {
+    case "command_execution": return `running ${firstWord(it.command) || "a command"}`;
+    case "file_change": return `editing ${short((it.changes && it.changes[0] && it.changes[0].path) || it.path || "files")}`;
+    case "web_search": return `searching the web${it.query ? ` for ${String(it.query).slice(0, 40)}` : ""}`;
+    case "mcp_tool_call": return `using ${it.tool || it.server || "a tool"}`;
+    default: return `using ${it.type}`;
+  }
 }
 
 // ---- tool summaries / speakability ----
@@ -166,12 +248,20 @@ function firstWord(cmd) {
   return line.split(/\s+/)[0] || "";
 }
 const READONLY_BASH = new Set(["ls", "find", "cat", "grep", "rg", "fd", "head", "tail", "wc", "pwd",
-  "echo", "which", "tree", "stat", "du", "df", "env", "sed", "awk", "cd", "git"]);
+  "echo", "which", "tree", "stat", "du", "df", "env", "sed", "awk", "cd", "git", "gh", "jq", "cut", "sort", "uniq"]);
+// `gh` is read-only by default (pr diff/view/list etc.); only voice it for clear mutations.
+const GH_WRITE = new Set(["create", "merge", "close", "edit", "comment", "review", "ready", "reopen",
+  "delete", "rerun", "sync", "push", "approve"]);
+function bashSpeakable(cmd) {
+  const fw = firstWord(cmd);
+  if (fw === "gh") return String(cmd || "").trim().split(/\s+/).slice(1, 4).some((w) => GH_WRITE.has(w));
+  return !READONLY_BASH.has(fw);
+}
 function toolSpeakable(block) {
   const i = block.input || {};
   switch (block.name) {
     case "Edit": case "Write": case "NotebookEdit": case "Task": case "WebSearch": case "WebFetch": return true;
-    case "Bash": return !READONLY_BASH.has(firstWord(i.command));
+    case "Bash": return bashSpeakable(i.command);
     default: return false;
   }
 }
@@ -256,16 +346,17 @@ function scanSessions() {
 }
 
 // List the current user's PRs in this chat's repo (incl. drafts), newest first, via gh.
-function listPRs(cwd, cb) {
-  execFile("gh", ["pr", "list", "--author", "@me", "--state", "all", "--limit", "30",
-    "--json", "number,title,url,createdAt,isDraft"],
-    { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
-      if (err) { console.log(`[prs] gh error: ${err.message.split("\n")[0]}`); return cb([]); }
-      let arr = [];
-      try { arr = JSON.parse(stdout); } catch { /* noop */ }
-      arr.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-      cb(arr.map((p) => ({ number: p.number, title: p.title, url: p.url, createdAt: p.createdAt, isDraft: !!p.isDraft })));
-    });
+function listPRs(cwd, scope, cb) {
+  const args = ["pr", "list", "--state", "all", "--limit", scope === "all" ? "50" : "30",
+    "--json", "number,title,url,createdAt,isDraft,author"];
+  if (scope !== "all") args.push("--author", "@me");
+  execFile("gh", args, { cwd, timeout: 15000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+    if (err) { console.log(`[prs] gh error: ${err.message.split("\n")[0]}`); return cb([]); }
+    let arr = [];
+    try { arr = JSON.parse(stdout); } catch { /* noop */ }
+    arr.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    cb(arr.map((p) => ({ number: p.number, title: p.title, url: p.url, createdAt: p.createdAt, isDraft: !!p.isDraft, author: p.author?.login || "" })));
+  });
 }
 
 // ---- chat registry ----
@@ -276,7 +367,7 @@ function createChat(opts = {}) {
   const cwd = opts.cwd || process.cwd();
   const label = opts.label || basename(cwd) || `chat ${chatCounter}`;
   const sessionId = `${(basename(cwd) || "chat").replace(/[^\w.-]/g, "_")}#${chatCounter}`;
-  chats.push(startChat(sessionId, label, DEFAULT_MODEL, cwd, opts.resumeId || null));
+  chats.push(startChat(sessionId, label, DEFAULT_MODEL, cwd, opts.resumeId || null, opts.engine || "claude"));
 }
 createChat(); // first chat in the launch directory
 
