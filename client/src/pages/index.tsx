@@ -248,6 +248,21 @@ function PRModal({ v, onPick, onClose }: { v: ReturnType<typeof useVoize>; onPic
   );
 }
 
+// Shown when the relay rejects the access code (wrong/missing). Lets the user paste the code.
+function AccessGate({ onSubmit }: { onSubmit: (code: string) => void }) {
+  const [code, setCode] = useState("");
+  return (
+    <main className="mx-auto flex h-screen max-w-sm flex-col items-center justify-center gap-4 p-6 text-center">
+      <h1 className="text-lg font-semibold">voizecode</h1>
+      <p className="text-sm text-muted-foreground">Enter your access code to connect. It came from your laptop agent (or open the <code>?key=…</code> link it printed).</p>
+      <form className="flex w-full gap-2" onSubmit={(e) => { e.preventDefault(); onSubmit(code); }}>
+        <Input autoFocus value={code} onChange={(e) => setCode(e.target.value)} placeholder="access code" className="flex-1" />
+        <Button type="submit" disabled={!code.trim()}>Connect</Button>
+      </form>
+    </main>
+  );
+}
+
 export default function Home() {
   const v = useVoize();
   const [draft, setDraft] = useState("");
@@ -267,6 +282,8 @@ export default function Home() {
     resetInput();
   };
   const editFrom = (userIndex: number, text: string) => { setForkPoint(userIndex); setDraft(text); requestAnimationFrame(() => { const el = taRef.current; if (el) { el.focus(); growInput(el); } }); };
+
+  if (v.authError) return <AccessGate onSubmit={v.submitCode} />;
 
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col gap-3 p-4">

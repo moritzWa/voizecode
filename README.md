@@ -94,7 +94,9 @@ node test/durability.mjs  # heartbeat, replay-on-reconnect, full relay-restart s
 ## Status / TODO
 
 - `--dangerously-skip-permissions` is on (unattended) — run on repos you trust.
-- No auth on the relay yet (single user, localhost). Add a shared token before exposing it.
+- Access gate: off for local dev; auto-on when deployed (Deno Deploy) or when `VOIZE_TOKEN` is set.
+  The laptop agent generates a code (`~/.voizecode/token`) and prints a `?key=…` URL; the relay adopts it
+  and the web app stores it in `localStorage`. `--dangerously-skip-permissions` makes this a must before exposing.
 - For phone-on-cellular: deploy the relay (e.g. Deno Deploy) and point both ends at it.
 - Lock-screen audio on iOS needs MediaSession + continuous playback (web app, future-mobile work).
 - Mic uses the deprecated ScriptProcessor; move to AudioWorklet.

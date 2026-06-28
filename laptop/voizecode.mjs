@@ -11,12 +11,26 @@ import { spawn, execFile } from "node:child_process";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
-import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
 const RELAY_URL = process.env.VOIZE_RELAY_URL || "ws://localhost:8787";
 const DEFAULT_MODEL = process.env.VOIZE_MODEL || "sonnet";
+
+// Access token: this laptop owns the code. Pin via VOIZE_TOKEN, else read/generate a stable one
+// at ~/.voizecode/token. Sent in every hello; the relay adopts it as the required code (when its
+// auth is on — i.e. deployed). The web app must open with ?key=<token> once.
+const AUTH_TOKEN = (() => {
+  if (process.env.VOIZE_TOKEN) return process.env.VOIZE_TOKEN.trim();
+  const file = join(homedir(), ".voizecode", "token");
+  try { return readFileSync(file, "utf8").trim(); } catch { /* generate below */ }
+  const tok = randomUUID().replace(/-/g, "");
+  try { mkdirSync(join(homedir(), ".voizecode"), { recursive: true }); writeFileSync(file, tok); } catch { /* non-fatal */ }
+  return tok;
+})();
+const APP_URL = process.env.VOIZE_APP_URL || "http://localhost:3030";
+console.log(`[voizecode] access: ${APP_URL}/?key=${AUTH_TOKEN}`);
 const RECONNECT_CAP_MS = Number(process.env.VOIZE_RECONNECT_CAP_MS) || 15000;
 
 const claudeArgs = (m, resumeId) => [
@@ -146,7 +160,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     sock.on("open", () => {
       retry = 0;
       console.log(`[${sessionId}] relay connected`);
-      send({ t: "hello", role: "agent", sessionId, label });
+      send({ t: "hello", role: "agent", sessionId, label, token: AUTH_TOKEN });
       announce();
       if (history && history.length) send({ t: "history", sessionId, messages: history }); // populate viewer on resume
       hbTimer = setInterval(() => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: "ping" })); }, 10000);

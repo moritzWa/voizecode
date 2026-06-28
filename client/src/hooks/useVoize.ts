@@ -3,6 +3,18 @@ import { ClipPlayer, b64ToBytes } from "@/lib/clipPlayer";
 import { ThinkingTone } from "@/lib/thinkingTone";
 
 const RELAY_WS = process.env.NEXT_PUBLIC_RELAY_WS || "ws://localhost:8787";
+const TOKEN_KEY = "voize:token";
+// Access code: from ?key=… (saved to localStorage + stripped from the URL so it isn't bookmarked
+// in the clear), else the stored value. Empty when none — fine for local dev (relay auth is off).
+function resolveToken(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const url = new URL(window.location.href);
+    const key = url.searchParams.get("key");
+    if (key) { localStorage.setItem(TOKEN_KEY, key); url.searchParams.delete("key"); history.replaceState(null, "", url.toString()); return key; }
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch { return ""; }
+}
 const MIC_SR = 16000;
 const LS_KEY = "voize:convos:v1";
 // Max wait between reconnect attempts (it retries FOREVER; this only caps the interval).
@@ -45,6 +57,9 @@ const normModel = (m: string) =>
 
 export function useVoize() {
   const [connected, setConnected] = useState(false);
+  const [authError, setAuthError] = useState(false); // access code missing/wrong -> show the gate
+  const tokenRef = useRef<string | null>(null);
+  const authFailed = useRef(false);
   const [live, setLive] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -189,7 +204,8 @@ export function useVoize() {
     sock.onopen = () => {
       setConnected(true);
       retry.current = 0;
-      send({ t: "hello", role: "client", since: lastSeq.current }); // replay anything missed
+      if (tokenRef.current === null) tokenRef.current = resolveToken();
+      send({ t: "hello", role: "client", since: lastSeq.current, token: tokenRef.current }); // replay anything missed
       send({ t: "set_voice", voice: voiceRef.current });            // re-apply chosen voice on (re)connect
       hbTimer.current = setInterval(() => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: "ping" })); }, 10000);
       armWatchdog();
@@ -197,6 +213,7 @@ export function useVoize() {
     sock.onclose = () => {
       setConnected(false);
       clearTimers();
+      if (authFailed.current) return; // wrong/missing access code -> don't reconnect-spam; show the gate
       const delay = Math.min(1000 * 2 ** retry.current, RECONNECT_CAP_MS) + Math.random() * 500; // backoff + jitter
       retry.current++;
       setTimeout(connect, delay);
@@ -205,6 +222,7 @@ export function useVoize() {
       armWatchdog();
       const m = JSON.parse(e.data);
       if (m.t === "pong") return;
+      if (m.t === "unauthorized") { authFailed.current = true; setAuthError(true); try { sock.close(); } catch { /* gone */ } return; }
       if (typeof m.seq === "number") lastSeq.current = Math.max(lastSeq.current, m.seq);
       const sid: string = m.sessionId;
       const isActive = sid === activeRef.current;
@@ -291,6 +309,14 @@ export function useVoize() {
     };
   }, [stopAudio]);
   useEffect(() => { connect(); return () => ws.current?.close(); }, [connect]);
+  // Gate UI: user typed an access code -> save it and reconnect.
+  const submitCode = useCallback((code: string) => {
+    const c = code.trim(); if (!c) return;
+    try { localStorage.setItem(TOKEN_KEY, c); } catch { /* quota */ }
+    tokenRef.current = c; authFailed.current = false; setAuthError(false); retry.current = 0;
+    try { ws.current?.close(); } catch { /* gone */ }
+    connect();
+  }, [connect]);
 
   // When the OS reports connectivity is back, don't wait for the next backoff tick —
   // drop any stale socket and reconnect immediately (handles long outages cleanly).
@@ -539,5 +565,6 @@ export function useVoize() {
     savedSessions, projects, requestSessions, openSession, newInProject, titles, copyDebug,
     thinkingSound, setThinkingSound, speakingTime, clipWords, prs, requestPRs, replayClip,
     paused, togglePlayback, rambling, toggleRamble, forkChat,
+    authError, submitCode,
   };
 }

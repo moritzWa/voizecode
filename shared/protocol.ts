@@ -16,7 +16,7 @@ export type Role = "agent" | "client";
 
 // ---- client -> relay ----
 export type ClientToRelay =
-  | { t: "hello"; role: "client"; since?: number } // since = last seq seen (replay)
+  | { t: "hello"; role: "client"; since?: number; token?: string } // since = last seq seen (replay); token = access code (when relay auth is on)
   | { t: "audio"; sessionId: string; pcm: string } // base64 16kHz mono PCM16 mic chunk
   | { t: "barge_in"; sessionId: string }           // user started talking over the agent
   | { t: "text"; sessionId: string; text: string } // typed input fallback
@@ -36,7 +36,7 @@ export type ClientToRelay =
 
 // ---- agent (laptop) -> relay ----
 export type AgentToRelay =
-  | { t: "hello"; role: "agent"; sessionId: string; label: string }
+  | { t: "hello"; role: "agent"; sessionId: string; label: string; token?: string } // token = this laptop's access code (relay adopts it as the required token)
   | { t: "init"; sessionId: string; model: string; label?: string; engine?: string }
   | { t: "delta"; text: string }                   // claude assistant text delta
   | { t: "tool_use"; name: string; summary: string; speak: boolean } // tool call started; speak=worth voicing
@@ -76,6 +76,7 @@ export type RelayToClient =
   | { t: "prs"; prs: PullRequest[] }                                     // authored PRs (PR-context modal)
   | { t: "history"; sessionId: string; messages: HistoryMsg[] }          // resumed transcript for the viewer
   | { t: "meta"; sessionId: string; claudeSessionId: string; cwd: string }   // claude session uuid + cwd (debug)
+  | { t: "unauthorized" }                                                // access code missing/wrong; socket will close
   | { t: "pong" };                                                       // heartbeat reply
 
 export interface SessionInfo { sessionId: string; label: string; model: string }

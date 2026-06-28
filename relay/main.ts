@@ -53,6 +53,13 @@ let client: WebSocket | null = null;
 const clipStore = makeBlobStore();
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 const b64ToBytes = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+// Access gate: ON automatically when deployed (Deno Deploy sets DENO_DEPLOYMENT_ID), or when
+// VOIZE_TOKEN/VOIZE_AUTH is set (pin a code, or force-enable for tests). OFF for plain local dev,
+// so localhost keeps working with no code. The required token is pinned from VOIZE_TOKEN, else
+// adopted from the first agent that connects (zero-config: the laptop generates + owns the code).
+const PINNED_TOKEN = Deno.env.get("VOIZE_TOKEN") ?? "";
+const AUTH_ON = !!Deno.env.get("DENO_DEPLOYMENT_ID") || !!PINNED_TOKEN || Deno.env.get("VOIZE_AUTH") === "1";
+let requiredToken: string = PINNED_TOKEN;
 let narration: "narrate" | "final-only" | "silent" = "narrate";
 let ttsVoice = (Deno.env.get("VOIZE_VOICE") ?? "alloy").toLowerCase(); // OpenAI TTS voice, set from the client
 
@@ -487,6 +494,21 @@ Deno.serve({ port: PORT }, (req) => {
     if (m.t === "ping") { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ t: "pong" })); return; }
     if (m.t === "hello") {
       role = m.role as "agent" | "client";
+      const tok = typeof m.token === "string" ? m.token : "";
+      // Access gate (only when AUTH_ON — i.e. deployed, or VOIZE_TOKEN/VOIZE_AUTH set; off for local dev).
+      // The relay adopts the first agent's token as the required code; clients must then match it.
+      if (AUTH_ON) {
+        if (role === "agent") {
+          if (!requiredToken && tok) { requiredToken = tok; console.log("[relay] adopted access token from agent"); }
+          if (!requiredToken || tok !== requiredToken) { try { socket.send(JSON.stringify({ t: "unauthorized" })); socket.close(); } catch { /* gone */ } return; }
+        } else { // client
+          if (!requiredToken || tok !== requiredToken) {
+            console.log(`[relay] client rejected (${!requiredToken ? "no agent token yet" : "bad code"})`);
+            try { socket.send(JSON.stringify({ t: "unauthorized" })); socket.close(); } catch { /* gone */ }
+            return;
+          }
+        }
+      }
       if (role === "agent") {
         session = getSession((m.sessionId as string) || "default");
         session.label = (m.label as string) || session.id;
