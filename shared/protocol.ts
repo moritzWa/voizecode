@@ -25,16 +25,19 @@ export type ClientToRelay =
   | { t: "set_voice"; voice: string }               // TTS voice (global)
   | { t: "reset"; sessionId: string }               // clear UI + fresh claude context (same tab)
   // create a chat: in cwd (new) and/or resuming a past Claude Code session. sessionId routes to the agent.
-  | { t: "new_session"; sessionId: string; cwd?: string; resumeId?: string; label?: string }
+  | { t: "new_session"; sessionId: string; cwd?: string; resumeId?: string; label?: string; engine?: string }
   | { t: "close_session"; sessionId: string }       // close a chat (kills its claude subprocess)
   | { t: "list_sessions"; sessionId: string }       // ask the agent for past sessions + projects
-  | { t: "list_prs"; sessionId: string }            // ask the agent for the chat repo's authored PRs
+  | { t: "list_prs"; sessionId: string; scope?: "mine" | "all" } // ask the agent for the chat repo's PRs (yours, or all)
+  | { t: "get_clip"; key: string }                  // replay a persisted clip: fetch its stored audio + words
+  | { t: "ramble"; sessionId: string; on: boolean } // hold/dictation mode: on = accumulate (no auto-commit); off = flush buffer as one turn
+  | { t: "fork"; sessionId: string; userIndex: number; label?: string } // fork the chat: new session resuming context truncated before the userIndex-th user turn (Claude only)
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
 // ---- agent (laptop) -> relay ----
 export type AgentToRelay =
   | { t: "hello"; role: "agent"; sessionId: string; label: string }
-  | { t: "init"; sessionId: string; model: string; label?: string }
+  | { t: "init"; sessionId: string; model: string; label?: string; engine?: string }
   | { t: "delta"; text: string }                   // claude assistant text delta
   | { t: "tool_use"; name: string; summary: string; speak: boolean } // tool call started; speak=worth voicing
   | { t: "turn_end"; fullText: string }            // assistant turn finished; fullText = whole reply
@@ -49,15 +52,16 @@ export interface SpokenWord { text: string; start: number } // start = media-tim
 export interface SavedSession { id: string; cwd: string; label: string; preview: string; mtime: number }
 export interface HistoryMsg { role: "user" | "assistant"; text: string }
 export interface ProjectInfo { cwd: string; label: string; count: number; mtime: number }
-export interface PullRequest { number: number; title: string; url: string; createdAt: string; isDraft: boolean }
+export interface PullRequest { number: number; title: string; url: string; createdAt: string; isDraft: boolean; author?: string }
 
 // ---- relay -> client ---- (all carry sessionId)
 export type RelayToClient =
   | { t: "transcript"; sessionId: string; text: string; final: boolean } // live STT
   | { t: "user_echo"; sessionId: string; text: string; seq: number }     // committed user turn
   | { t: "status"; sessionId: string; text: string; seq: number }        // progress ("editing auth.ts")
-  | { t: "speech_text"; sessionId: string; text: string; seq: number; clip: number } // text being spoken (clip = its audio id)
+  | { t: "speech_text"; sessionId: string; text: string; seq: number; clip: number; key?: string } // text being spoken (clip = its audio id; key = persisted-clip handle for replay)
   | { t: "words"; sessionId: string; clip: number; words: SpokenWord[]; seq: number } // per-word start times (ElevenLabs) for highlight
+  | { t: "clip_audio"; key: string; b64: string; words: SpokenWord[]; format: AudioFormat } // replay payload for a persisted clip
   | { t: "utterance_discarded"; sessionId: string }                      // a backchannel/noise was ignored -> resume audio
   // Audio streams as ordered mp3 byte chunks grouped by `clip` (one spoken utterance),
   // so the client can append to a MediaSource and start playing before synthesis finishes.
@@ -82,9 +86,11 @@ export type RelayToAgent =
   | { t: "interrupt" }                  // stop claude mid-turn
   | { t: "set_model"; model: ClaudeModel }
   | { t: "reset" }                      // respawn claude = fresh context
-  | { t: "new_chat"; cwd?: string; resumeId?: string; label?: string } // spawn a chat (in cwd, maybe resuming)
+  | { t: "new_chat"; cwd?: string; resumeId?: string; label?: string; engine?: string } // spawn a chat (cwd, resume, engine)
+  | { t: "fork"; userIndex: number; label?: string } // fork this chat at a turn boundary into a new resumed chat
   | { t: "close" }                      // kill this chat (claude + socket)
   | { t: "list_sessions" }              // scan + return past sessions/projects
+  | { t: "list_prs"; scope?: "mine" | "all" } // list the repo's PRs (yours, or all)
   | { t: "pong" };                      // heartbeat reply
 
 export type NarrationMode = "narrate" | "final-only" | "silent";
