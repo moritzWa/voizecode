@@ -9,7 +9,16 @@ const LS_KEY = "voize:convos:v1";
 // The `online` event triggers an immediate reconnect, so a longer outage still recovers fast.
 const RECONNECT_CAP_MS = Number(process.env.NEXT_PUBLIC_RECONNECT_CAP_MS) || 15000;
 const VOICE_KEY = "voize:voice";
-const MIC_KEY = "voize:micId";
+const MICPREF_KEY = "voize:micPref"; // preferred mic by LABEL ("" = auto); labels survive deviceId churn
+// When no explicit preference matches, fall back through these (substring match) before system default.
+const DEFAULT_MIC_PRIORITY = ["Studio Display Microphone", "MacBook Pro Microphone"];
+// Resolve the active input deviceId from a label preference + availability. "" = system default.
+function resolveMic(mics: { id: string; label: string }[], pref: string): string {
+  const find = (needle: string) => mics.find((m) => m.label.toLowerCase().includes(needle.toLowerCase()));
+  if (pref) { const m = find(pref); if (m) return m.id; }
+  for (const p of DEFAULT_MIC_PRIORITY) { const m = find(p); if (m) return m.id; }
+  return "";
+}
 // OpenAI tts-1 voices (default TTS provider). Pick in the UI; the relay applies it.
 export const VOICES = [
   { id: "alloy", label: "alloy — neutral" },
@@ -20,7 +29,7 @@ export const VOICES = [
   { id: "shimmer", label: "shimmer — soft ♀" },
 ];
 
-export type Line = { kind: "user" | "agent" | "status" | "speech"; text: string; clip?: number };
+export type Line = { kind: "user" | "agent" | "status" | "speech"; text: string; clip?: number; key?: string };
 export type SessionInfo = { sessionId: string; label: string; model: string };
 export type SavedSession = { id: string; cwd: string; label: string; preview: string; mtime: number };
 export type ProjectInfo = { cwd: string; label: string; count: number; mtime: number };
@@ -49,17 +58,22 @@ export function useVoize() {
   const mutedRef = useRef(false);
   const [thinkingSound, setThinkingSoundState] = useState(true); // ambient "thinking" shimmer
   const thinkingSoundRef = useRef(true);
+  const [paused, setPaused] = useState(false);                          // user paused playback (pause/play button)
+  const [rambling, setRambling] = useState(false);                      // ramble/dictation: accumulate speech, send on stop
+  const ramblingRef = useRef(false);
   const [speakingClip, setSpeakingClip] = useState<number | null>(null); // clip id currently being voiced
   const [speakingTime, setSpeakingTime] = useState(0);                   // playback time of the active clip (s)
   const [clipWords, setClipWords] = useState<Record<number, { text: string; start: number }[]>>({}); // per-clip word timings
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]); // past sessions (browser)
   const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
-  const [prs, setPrs] = useState<{ number: number; title: string; url: string; createdAt: string; isDraft: boolean }[]>([]);
+  const [prs, setPrs] = useState<{ number: number; title: string; url: string; createdAt: string; isDraft: boolean; author?: string }[]>([]);
   const [metas, setMetas] = useState<Record<string, { claudeSessionId: string; cwd: string }>>({}); // debug info per chat
   const [voice, setVoiceState] = useState("alloy");
   const voiceRef = useRef(voice);
   const [mics, setMics] = useState<{ id: string; label: string }[]>([]);
-  const [micId, setMicId] = useState("");        // "" = system default
+  const [micPref, setMicPrefState] = useState(""); // preferred mic LABEL ("" = auto / priority list)
+  const micPrefRef = useRef("");
+  const [micId, setMicId] = useState("");          // active deviceId, derived from micPref + availability
   const micIdRef = useRef(micId);
 
   const ws = useRef<WebSocket | null>(null);
@@ -68,6 +82,7 @@ export function useVoize() {
   const wdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);   // silence watchdog
   const retry = useRef(0);                                              // backoff attempt count
   const wantNew = useRef(false);                                        // auto-focus the next new session
+  const forkPending = useRef<string | null>(null);                      // edited text to send once a forked chat focuses
   const knownIds = useRef<Set<string>>(new Set());                      // sessions seen so far
   const activeRef = useRef(activeId);
   const rateRef = useRef(rate);
@@ -82,14 +97,20 @@ export function useVoize() {
   const player = useRef<ClipPlayer | null>(null);
   const tone = useRef<ThinkingTone | null>(null);
   const pending = useRef<Record<string, HeldEvent[]>>({}); // audio held for unfocused sessions
+  // Continuous replay: a click plays the clicked line and every following spoken line to the end
+  // of the turn. We fetch all their clips, then push them to the player in order as the contiguous
+  // prefix arrives (so out-of-order fetch responses still play sequentially).
+  const replayQ = useRef<{ key: string; clip: number }[]>([]);
+  const replayAudio = useRef<Record<string, { b64: string; words: { text: string; start: number }[] }>>({});
+  const replayNext = useRef(0);
 
   useEffect(() => { activeRef.current = activeId; }, [activeId]);
   useEffect(() => { rateRef.current = rate; player.current?.setRate(rate); }, [rate]);
   useEffect(() => {
     const v = (typeof window !== "undefined" && localStorage.getItem(VOICE_KEY)) || "alloy";
     setVoiceState(v); voiceRef.current = v;
-    const savedMic = (typeof window !== "undefined" && localStorage.getItem(MIC_KEY)) || "";
-    setMicId(savedMic); micIdRef.current = savedMic;
+    const savedPref = (typeof window !== "undefined" && localStorage.getItem(MICPREF_KEY)) || "";
+    setMicPrefState(savedPref); micPrefRef.current = savedPref;
     const ts = typeof window === "undefined" ? "1" : (localStorage.getItem("voize:thinkingSound") ?? "1");
     setThinkingSoundState(ts !== "0"); thinkingSoundRef.current = ts !== "0";
   }, []);
@@ -123,7 +144,7 @@ export function useVoize() {
   useEffect(() => {
     const p = new ClipPlayer(
       markSpeaking,
-      (clip) => { setSpeakingClip(clip); setSpeakingTime(0); }, // new clip -> reset word highlight
+      (clip) => { setSpeakingClip(clip); setSpeakingTime(0); setPaused(false); }, // new clip -> reset highlight + un-pause
       (_clip, t) => setSpeakingTime(t),                          // playback progress -> advance highlight
     );
     p.setRate(rateRef.current); // apply the initial speed (default 2x) before the first clip plays
@@ -133,6 +154,8 @@ export function useVoize() {
   }, []);
   const stopAudio = useCallback(() => {
     player.current?.stop(); tone.current?.stop(); markSpeaking(false);
+    setPaused(false);
+    replayQ.current = []; replayNext.current = 0; // cancel any in-flight continuous replay
     vadPending.current = false;
     if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current);
   }, []);
@@ -198,6 +221,11 @@ export function useVoize() {
             stopAudio();
             setActiveId(id);
             setUnread((p) => ({ ...p, [id]: false }));
+            // Session ids (<dir>#<n>) can be reused after an agent restart, so a brand-new chat
+            // may collide with a stale persisted transcript. Clear it; a resumed/forked chat's
+            // `history` message arrives right after and repopulates, so resumes are unaffected.
+            setConvos((p) => ({ ...p, [id]: [] }));
+            if (forkPending.current) { const t = forkPending.current; forkPending.current = null; send({ t: "text", sessionId: id, text: t }); }
           }
           break;
         }
@@ -229,7 +257,7 @@ export function useVoize() {
         case "user_echo": addLine(sid, { kind: "user", text: m.text }); setInterim((p) => ({ ...p, [sid]: "" })); break;
         case "agent_text": agentBuf.current[sid] = (agentBuf.current[sid] || "") + m.text; break;
         case "status": flushAgent(sid); addLine(sid, { kind: "status", text: m.text }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
-        case "speech_text": flushAgent(sid); addLine(sid, { kind: "speech", text: m.text, clip: m.clip }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
+        case "speech_text": flushAgent(sid); addLine(sid, { kind: "speech", text: m.text, clip: m.clip, key: m.key }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
         case "audio_chunk":
           if (isActive) player.current?.pushChunk(m.clip, b64ToBytes(m.b64));
           else { // hold it: play when the user focuses this session
@@ -243,6 +271,20 @@ export function useVoize() {
           if (isActive) player.current?.endClip(m.clip);
           else (pending.current[sid] ||= []).push({ c: m.clip, e: true });
           break;
+        case "clip_audio": { // store the fetched clip, then flush the queue's contiguous ready prefix in order
+          replayAudio.current[m.key] = { b64: m.b64, words: m.words || [] };
+          while (replayNext.current < replayQ.current.length) {
+            const item = replayQ.current[replayNext.current];
+            const got = replayAudio.current[item.key];
+            if (!got) break;                 // next clip not fetched yet -> wait
+            replayNext.current++;
+            if (!got.b64) continue;          // missing/un-persisted clip -> skip, keep going
+            if (got.words.length) setClipWords((p) => ({ ...p, [item.clip]: got.words }));
+            player.current?.pushChunk(item.clip, b64ToBytes(got.b64));
+            player.current?.endClip(item.clip);
+          }
+          break;
+        }
         case "stop_audio": if (isActive) stopAudio(); break;
         case "thinking": setThinking((p) => ({ ...p, [sid]: m.on })); if (!m.on) flushAgent(sid); break;
       }
@@ -266,6 +308,7 @@ export function useVoize() {
   // switching tabs: stop current audio, clear unread, then play whatever this
   // session queued while it was unfocused.
   const switchSession = useCallback((sid: string) => {
+    if (ramblingRef.current) { send({ t: "ramble", sessionId: activeRef.current, on: false }); setRambling(false); ramblingRef.current = false; }
     stopAudio();
     setActiveId(sid);
     setUnread((p) => ({ ...p, [sid]: false }));
@@ -278,7 +321,7 @@ export function useVoize() {
   }, [stopAudio]);
 
   // ---- mic capture + VAD barge-in ----
-  const start = useCallback(async () => {
+  const start = useCallback(async (ramble = false) => {
     setMicError("");
     setMuted(false); mutedRef.current = false; // fresh call starts unmuted
     let s: MediaStream;
@@ -347,9 +390,12 @@ export function useVoize() {
       });
       (vad.current as unknown as { start: () => void }).start();
     } catch (e) { console.warn("VAD unavailable, barge-in disabled", e); }
+    // Optionally begin the session already in ramble mode (start talking right away).
+    if (ramble) { setRambling(true); ramblingRef.current = true; send({ t: "ramble", sessionId: activeRef.current, on: true }); }
   }, [stopAudio]);
 
   const stop = useCallback(() => {
+    if (ramblingRef.current) { send({ t: "ramble", sessionId: activeRef.current, on: false }); setRambling(false); ramblingRef.current = false; }
     vad.current?.destroy(); vad.current = null;
     proc.current?.disconnect(); ac.current?.close();
     stream.current?.getTracks().forEach((t) => t.stop());
@@ -359,6 +405,44 @@ export function useVoize() {
   const toggleMute = useCallback(() => setMuted((m) => { mutedRef.current = !m; return !m; }), []);
 
   const sendText = useCallback((text: string) => { send({ t: "text", sessionId: activeRef.current, text }); }, []);
+  // Ramble/dictation mode: tell the relay to accumulate speech across pauses (no auto-commit).
+  // Toggling off flushes the whole buffer to the model as one turn. Needs the mic open.
+  const setRamble = useCallback((on: boolean) => {
+    setRambling(on); ramblingRef.current = on;
+    if (on && mutedRef.current) { setMuted(false); mutedRef.current = false; }
+    send({ t: "ramble", sessionId: activeRef.current, on });
+  }, []);
+  const toggleRamble = useCallback(() => setRamble(!ramblingRef.current), [setRamble]);
+  // Fork (rewind-lite, Claude only): spawn a new chat resuming context truncated before the
+  // userIndex-th user turn, then send the edited message into it once it focuses.
+  const forkChat = useCallback((userIndex: number, text: string) => {
+    wantNew.current = true;
+    forkPending.current = text;
+    send({ t: "fork", sessionId: activeRef.current, userIndex });
+  }, []);
+  // Replay from a spoken line onward: play the clicked line and every following spoken line to the
+  // end of the turn, highlighting each in sequence (Speechify-style continuous read).
+  const replayClip = useCallback((line: Line) => {
+    if (line.clip == null) return;
+    const ls = convos[activeRef.current] || [];
+    const start = ls.findIndex((l) => l.kind === "speech" && l.clip === line.clip);
+    if (start < 0) return;
+    const queue = ls.slice(start)
+      .filter((l) => l.kind === "speech" && l.key && l.clip != null)
+      .map((l) => ({ key: l.key as string, clip: l.clip as number }));
+    if (!queue.length) return;
+    stopAudio();
+    replayQ.current = queue; replayAudio.current = {}; replayNext.current = 0;
+    for (const item of queue) send({ t: "get_clip", key: item.key });
+  }, [convos, stopAudio]);
+  // Pause/play button: pause the current speech, resume it, or (if idle) replay the last spoken line.
+  const togglePlayback = useCallback(() => {
+    const pl = player.current; if (!pl) return;
+    if (pl.isPaused()) { pl.resume(); setPaused(false); return; }
+    if (pl.isPlaying()) { pl.pause(); setPaused(true); return; }
+    const ls = convos[activeRef.current] || [];
+    for (let i = ls.length - 1; i >= 0; i--) { if (ls[i].kind === "speech" && ls[i].key) { replayClip(ls[i]); return; } }
+  }, [convos, replayClip]);
   const interruptNow = useCallback(() => { send({ t: "barge_in", sessionId: activeRef.current }); stopAudio(); }, [stopAudio]);
   const setModel = useCallback((m: string) => {
     setSessions((p) => p.map((s) => s.sessionId === activeRef.current ? { ...s, model: m } : s));
@@ -369,21 +453,36 @@ export function useVoize() {
     try { localStorage.setItem(VOICE_KEY, v); } catch { /* quota */ }
     send({ t: "set_voice", voice: v });
   }, []);
-  const setMic = useCallback((id: string) => {
-    setMicId(id); micIdRef.current = id;
-    try { localStorage.setItem(MIC_KEY, id); } catch { /* quota */ }
-    if (live) { stop(); setTimeout(() => start(), 150); } // re-acquire capture on the new device
-  }, [live, stop, start]);
+  // Set the preferred mic by LABEL ("auto"/"" = priority list). Re-acquires capture if live.
+  const setMicPref = useCallback((label: string) => {
+    const pref = label === "auto" ? "" : label;
+    setMicPrefState(pref); micPrefRef.current = pref;
+    try { localStorage.setItem(MICPREF_KEY, pref); } catch { /* quota */ }
+    const id = resolveMic(mics, pref);
+    if (id !== micIdRef.current) {
+      setMicId(id); micIdRef.current = id;
+      if (live) { stop(); setTimeout(() => start(ramblingRef.current), 150); }
+    }
+  }, [mics, live, stop, start]);
+  // Whenever the device list changes (permission granted, device plugged/unplugged), re-resolve
+  // the active device from the preference + priority order; re-acquire if we're already live.
+  useEffect(() => {
+    const id = resolveMic(mics, micPrefRef.current);
+    if (id !== micIdRef.current) {
+      setMicId(id); micIdRef.current = id;
+      if (live) { stop(); setTimeout(() => start(ramblingRef.current), 150); }
+    }
+  }, [mics, live, stop, start]);
   // New chat as a separate session/tab (the agent spawns a sibling claude); auto-focuses it.
   const newSession = useCallback(() => { wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current }); }, []);
   // Session browser: fetch past sessions/projects, resume one, or start fresh in a project dir.
   const requestSessions = useCallback(() => send({ t: "list_sessions", sessionId: activeRef.current }), []);
-  const requestPRs = useCallback(() => send({ t: "list_prs", sessionId: activeRef.current }), []);
-  const openSession = useCallback((id: string, cwd: string, label: string) => {
-    wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, resumeId: id, label });
+  const requestPRs = useCallback((scope: "mine" | "all" = "mine") => { setPrs([]); send({ t: "list_prs", sessionId: activeRef.current, scope }); }, []);
+  const openSession = useCallback((id: string, cwd: string, label: string, engine = "claude") => {
+    wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, resumeId: id, label, engine });
   }, []);
-  const newInProject = useCallback((cwd: string, label: string) => {
-    wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, label });
+  const newInProject = useCallback((cwd: string, label: string, engine = "claude") => {
+    wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, label, engine });
   }, []);
   // Close a chat: kill its claude subprocess + drop the tab. Switches away if it was active.
   const closeSession = useCallback((sid: string) => {
@@ -436,8 +535,9 @@ export function useVoize() {
     lines: convos[activeId] || [], interim: interim[activeId] || "",
     thinking: !!thinking[activeId], model: active?.model || "sonnet",
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
-    voice, setVoice, clearChat, newSession, closeSession, mics, micId, setMic, muted, toggleMute, speakingClip,
+    voice, setVoice, clearChat, newSession, closeSession, mics, micPref, setMicPref, muted, toggleMute, speakingClip,
     savedSessions, projects, requestSessions, openSession, newInProject, titles, copyDebug,
-    thinkingSound, setThinkingSound, speakingTime, clipWords, prs, requestPRs,
+    thinkingSound, setThinkingSound, speakingTime, clipWords, prs, requestPRs, replayClip,
+    paused, togglePlayback, rambling, toggleRamble, forkChat,
   };
 }

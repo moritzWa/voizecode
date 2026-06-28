@@ -1,22 +1,23 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check, Settings, GitPullRequest } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check, Settings, GitPullRequest, Search, Play, Pause, AudioLines, Pencil } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const MIC_DEFAULT = "__default__";
+const MIC_AUTO = "__auto__";
 
 // Render an agent reply as markdown. Fenced code blocks scroll horizontally (no wrap, so
 // ASCII diagrams stay aligned on a narrow phone); prose, lists, headings render readably.
 function AgentMessage({ text }: { text: string }) {
   return (
-    <div className="rounded-lg bg-muted px-3 py-2 text-xs leading-relaxed text-foreground break-words
+    <div className="px-1 py-0.5 text-xs leading-relaxed text-foreground break-words
       [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0
       [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5
       [&_h1]:mb-1 [&_h1]:mt-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mb-1 [&_h2]:mt-2 [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:font-semibold
@@ -25,6 +26,21 @@ function AgentMessage({ text }: { text: string }) {
       [&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-background [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:font-mono">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </div>
+  );
+}
+
+// Inline markdown for a single narration line (bold + code), rendered without block wrappers.
+function InlineMd({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <>{children}</>,
+        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        code: ({ children }) => <code className="rounded bg-background px-1 font-mono text-[0.9em]">{children}</code>,
+        a: ({ href, children }) => <a href={href} className="text-blue-600 underline dark:text-blue-400">{children}</a>,
+      }}
+    >{text}</ReactMarkdown>
   );
 }
 
@@ -39,21 +55,30 @@ function timeAgo(ms: number) {
 // Modal to start a new chat in a project that already has sessions, or resume a past session.
 function SessionBrowser({ projects, sessions, onProject, onSession, onClose }: {
   projects: ProjectInfo[]; sessions: SavedSession[];
-  onProject: (cwd: string, label: string) => void;
-  onSession: (s: SavedSession) => void; onClose: () => void;
+  onProject: (cwd: string, label: string, engine: string) => void;
+  onSession: (s: SavedSession, engine: string) => void; onClose: () => void;
 }) {
+  const [engine, setEngine] = useState("claude"); // which coding agent backs a NEW chat
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[8vh]" onClick={onClose}>
       <div className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b px-4 py-3">
           <h2 className="text-sm font-semibold">Open a chat</h2>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
+          <div className="flex items-center gap-2">
+            <div className="flex overflow-hidden rounded-md border text-xs">
+              {["claude", "codex"].map((e) => (
+                <button key={e} onClick={() => setEngine(e)}
+                  className={cn("px-2.5 py-1 capitalize", engine === e ? "bg-primary text-primary-foreground" : "hover:bg-accent")}>{e}</button>
+              ))}
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
+          </div>
         </div>
         <div className="overflow-y-auto p-2">
           <div className="px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">New chat in a project</div>
           {projects.length === 0 && <div className="px-2 py-2 text-xs text-muted-foreground">No projects found yet.</div>}
           {projects.map((p) => (
-            <button key={p.cwd} onClick={() => onProject(p.cwd, p.label)}
+            <button key={p.cwd} onClick={() => onProject(p.cwd, p.label, engine)}
               className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent">
               <FolderOpen size={15} className="shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
@@ -67,7 +92,7 @@ function SessionBrowser({ projects, sessions, onProject, onSession, onClose }: {
           <div className="mt-2 px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">Resume a session</div>
           {sessions.length === 0 && <div className="px-2 py-2 text-xs text-muted-foreground">No past sessions.</div>}
           {sessions.map((s) => (
-            <button key={s.id} onClick={() => onSession(s)}
+            <button key={s.id} onClick={() => onSession(s, "claude")}
               className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent">
               <History size={15} className="mt-0.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
@@ -106,8 +131,20 @@ function SettingsModal({ v, onClose }: { v: ReturnType<typeof useVoize>; onClose
           <h2 className="text-sm font-semibold">Settings</h2>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
         </div>
-        <div className="px-4 py-2">
+        <div className="divide-y px-4 py-2">
           <SettingRow title="Ambient thinking sound" desc="Soft shimmer while the agent is working." on={v.thinkingSound} onChange={v.setThinkingSound} />
+          <div className="py-2">
+            <div className="text-sm font-medium">Default microphone</div>
+            <div className="mb-2 text-xs text-muted-foreground">Auto prefers your Studio Display mic, then the MacBook Pro mic. Pick one to pin it.</div>
+            <Select value={v.micPref || MIC_AUTO} onValueChange={(val) => v.setMicPref(val === MIC_AUTO ? "auto" : val)}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={MIC_AUTO}>Auto (Studio Display → MacBook Pro)</SelectItem>
+                {v.mics.map((m) => <SelectItem key={m.id} value={m.label}>{m.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {v.mics.length === 0 && <div className="mt-1 text-xs text-muted-foreground">Start a call once so the browser reveals device names.</div>}
+          </div>
         </div>
       </div>
     </div>
@@ -115,41 +152,96 @@ function SettingsModal({ v, onClose }: { v: ReturnType<typeof useVoize>; onClose
 }
 
 // Speechify-style: render a spoken line word-by-word, highlighting the word at playback time `t`.
+// Only the word's core glyphs get the darker pill — trailing punctuation and the inter-word
+// space stay outside it, so a comma or period never sits inside the highlight.
 function SpokenWords({ words, t, fallback }: { words: { text: string; start: number }[]; t: number; fallback: string }) {
   if (!words.length) return <>{fallback}</>;
   let active = -1;
   for (let i = 0; i < words.length; i++) { if (words[i].start <= t) active = i; else break; }
   return (
     <>
-      {words.map((w, i) => (
-        <span key={i} className={i === active ? "rounded bg-primary/30 box-decoration-clone" : undefined}>
-          {w.text}{i < words.length - 1 ? " " : ""}
-        </span>
-      ))}
+      {words.map((w, i) => {
+        const m = w.text.match(/^(.*?)([.,;:!?)\]"'»]*)$/) ?? [w.text, w.text, ""];
+        const core = m[1] || w.text, tail = m[2] || "";
+        return (
+          <span key={i}>
+            {i === active && core
+              ? <span className="rounded-[2px] bg-[#c3c4f5] dark:bg-indigo-400/40">{core}</span>
+              : core}
+            {tail}{i < words.length - 1 ? " " : ""}
+          </span>
+        );
+      })}
     </>
   );
 }
 
-// Modal listing the chat repo's authored PRs (incl. drafts); pick one to talk through it.
+// Bucket a PR by how long ago it was created, for scroll-orientation headers.
+function prBucket(createdAt: string): string {
+  const days = (Date.now() - new Date(createdAt).getTime()) / 86400000;
+  if (days < 1) return "Today";
+  if (days < 2) return "Yesterday";
+  if (days < 7) return "This week";
+  if (days < 14) return "Last week";
+  if (days < 21) return "2 weeks ago";
+  if (days < 28) return "3 weeks ago";
+  if (days < 60) return "Last month";
+  return new Date(createdAt).toLocaleString(undefined, { month: "long", year: "numeric" });
+}
+
+// Modal listing the chat repo's PRs (yours, or all; incl. drafts); search + recency headers; pick one to talk through it.
 function PRModal({ v, onPick, onClose }: { v: ReturnType<typeof useVoize>; onPick: (pr: { number: number; title: string; url: string }) => void; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [scope, setScope] = useState<"mine" | "all">("mine");
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { setLoading(true); v.requestPRs(scope); }, [scope]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setLoading(false); }, [v.prs]);
+  const query = q.trim().toLowerCase();
+  const filtered = query ? v.prs.filter((p) => p.title.toLowerCase().includes(query)) : v.prs;
+  let lastBucket = "";
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[10vh]" onClick={onClose}>
       <div className="flex max-h-[70vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b px-4 py-3">
           <h2 className="text-sm font-semibold">Talk through a PR</h2>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
+          <div className="flex items-center gap-2">
+            <div className="flex overflow-hidden rounded-md border text-xs">
+              {(["mine", "all"] as const).map((sc) => (
+                <button key={sc} onClick={() => setScope(sc)}
+                  className={cn("px-2.5 py-1 capitalize", scope === sc ? "bg-primary text-primary-foreground" : "hover:bg-accent")}>
+                  {sc === "mine" ? "Mine" : "All"}
+                </button>
+              ))}
+            </div>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
+          </div>
+        </div>
+        <div className="border-b p-2">
+          <div className="relative">
+            <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={scope === "all" ? "Search all PRs…" : "Search your PRs…"} className="h-8 pl-8 text-sm" />
+          </div>
         </div>
         <div className="overflow-y-auto p-2">
-          {v.prs.length === 0 && <div className="px-2 py-3 text-xs text-muted-foreground">No authored PRs found in this repo (needs <code>gh</code> auth + a GitHub remote).</div>}
-          {v.prs.map((p) => (
-            <button key={p.number} onClick={() => onPick(p)} className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent">
-              <GitPullRequest size={15} className="mt-0.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">#{p.number} {p.title}</span>
-                <span className="block truncate text-xs text-muted-foreground">{p.isDraft ? "draft · " : ""}{new Date(p.createdAt).toLocaleDateString()}</span>
-              </span>
-            </button>
-          ))}
+          {loading && <div className="px-2 py-3 text-xs text-muted-foreground">Loading PRs…</div>}
+          {!loading && v.prs.length === 0 && <div className="px-2 py-3 text-xs text-muted-foreground">No {scope === "all" ? "" : "authored "}PRs found in this repo (needs <code>gh</code> auth + a GitHub remote).</div>}
+          {!loading && v.prs.length > 0 && filtered.length === 0 && <div className="px-2 py-3 text-xs text-muted-foreground">No PRs match “{q}”.</div>}
+          {!loading && filtered.map((p) => {
+            const bucket = prBucket(p.createdAt);
+            const header = bucket !== lastBucket ? bucket : null;
+            lastBucket = bucket;
+            return (
+              <div key={p.number}>
+                {header && <div className="px-2 pb-1 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{header}</div>}
+                <button onClick={() => onPick(p)} className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-accent">
+                  <GitPullRequest size={15} className="shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate">{p.title}</span>
+                  {scope === "all" && p.author && <span className="shrink-0 text-xs text-muted-foreground">{p.author}</span>}
+                  {p.isDraft && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">draft</span>}
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -163,10 +255,18 @@ export default function Home() {
   const [settings, setSettings] = useState(false);
   const [prModal, setPrModal] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [forkPoint, setForkPoint] = useState<number | null>(null); // userIndex being edited (fork on send)
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const isCodexChat = v.model === "codex"; // forking is Claude-only
   const openBrowser = () => { v.requestSessions(); setBrowser(true); };
   const growInput = (el: HTMLTextAreaElement) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; };
-  const submit = () => { if (!draft.trim()) return; v.sendText(draft); setDraft(""); if (taRef.current) taRef.current.style.height = "auto"; };
+  const resetInput = () => { setDraft(""); setForkPoint(null); if (taRef.current) taRef.current.style.height = "auto"; };
+  const submit = () => {
+    if (!draft.trim()) return;
+    if (forkPoint != null) v.forkChat(forkPoint, draft); else v.sendText(draft);
+    resetInput();
+  };
+  const editFrom = (userIndex: number, text: string) => { setForkPoint(userIndex); setDraft(text); requestAnimationFrame(() => { const el = taRef.current; if (el) { el.focus(); growInput(el); } }); };
 
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col gap-3 p-4">
@@ -240,21 +340,36 @@ export default function Home() {
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg rounded-tl-none border bg-card p-3">
-          {v.lines.map((l, i) => {
+          {(() => { let userSeen = 0; return v.lines.map((l, i) => {
             if (l.kind === "agent") return <AgentMessage key={i} text={l.text} />;
             if (l.kind === "speech") {
               const active = l.clip != null && l.clip === v.speakingClip;
               const words = l.clip != null ? v.clipWords[l.clip] : undefined;
               return (
-                <div key={i} className={cn("break-words rounded-lg px-3 py-1.5 text-sm transition-colors", active ? "bg-accent" : "bg-muted")}>
-                  {active && words ? <SpokenWords words={words} t={v.speakingTime} fallback={l.text} /> : l.text}
+                <div key={i} onClick={() => l.key && v.replayClip(l)}
+                  title={l.key ? "Click to replay" : undefined}
+                  className={cn("break-words rounded px-1 py-0.5 text-sm transition-colors",
+                    active ? "bg-[#e7e6fb] dark:bg-indigo-400/15" : l.key && "cursor-pointer hover:bg-muted")}>
+                  {active && words ? <SpokenWords words={words} t={v.speakingTime} fallback={l.text} /> : <InlineMd text={l.text} />}
                 </div>
               );
             }
-            return <div key={i} className={cn("break-words",
-              l.kind === "user" ? "self-end rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground" :
-              "px-1 text-xs italic text-muted-foreground")}>{l.text}</div>;
-          })}
+            if (l.kind === "user") {
+              const userIndex = userSeen++;
+              return (
+                <div key={i} className="group flex items-center justify-end gap-1.5 self-end">
+                  {!isCodexChat && (
+                    <button onClick={() => editFrom(userIndex, l.text)} title="Edit from here (forks the chat)"
+                      className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100">
+                      <Pencil size={13} />
+                    </button>
+                  )}
+                  <div className="max-w-[85%] break-words rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground">{l.text}</div>
+                </div>
+              );
+            }
+            return <div key={i} className="break-words px-1 text-xs italic text-muted-foreground">{l.text}</div>;
+          }); })()}
           {v.interim && <div className="self-end px-3 text-sm text-muted-foreground">{v.interim}…</div>}
         </div>
       </div>
@@ -266,12 +381,16 @@ export default function Home() {
 
       {v.mics.length > 0 && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={v.togglePlayback}
+            title={v.paused ? "Resume playback" : "Pause playback (click a line to replay)"} aria-label="Pause or play">
+            {v.paused ? <Play size={14} /> : <Pause size={14} />}
+          </Button>
           <Mic size={14} className="shrink-0" />
-          <Select value={v.micId || MIC_DEFAULT} onValueChange={(val) => v.setMic(val === MIC_DEFAULT ? "" : val)}>
+          <Select value={v.micPref || MIC_AUTO} onValueChange={(val) => v.setMicPref(val === MIC_AUTO ? "auto" : val)}>
             <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value={MIC_DEFAULT}>Default mic</SelectItem>
-              {v.mics.map((m) => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+              <SelectItem value={MIC_AUTO}>Auto (Studio Display → MacBook Pro)</SelectItem>
+              {v.mics.map((m) => <SelectItem key={m.id} value={m.label}>{m.label}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
@@ -280,11 +399,23 @@ export default function Home() {
       {v.micError && <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{v.micError}</div>}
 
       {!v.live ? (
-        <Button variant="success" size="xl" onClick={v.start}>
-          <Mic size={18} /> Start call
-        </Button>
+        <div className="flex flex-col gap-2">
+          <Button variant="success" size="xl" onClick={() => v.start()}>
+            <Mic size={18} /> Start call
+          </Button>
+          <Button variant="outline" size="xl" className="font-semibold" onClick={() => v.start(true)}>
+            <AudioLines size={18} /> Start with a ramble
+          </Button>
+        </div>
       ) : (
         <div className="flex flex-col gap-2">
+          {/* ramble/dictation: talk freely with pauses; the agent waits until you tap to send */}
+          <Button size="xl" className={cn("text-base font-semibold", v.rambling && "bg-red-600 text-white hover:bg-red-700")}
+            variant={v.rambling ? "default" : "outline"} onClick={v.toggleRamble}>
+            {v.rambling
+              ? <><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white" /> Recording — tap to send</>
+              : <><AudioLines size={20} /> Ramble (talk freely, send when done)</>}
+          </Button>
           {/* large primary mute toggle — silence ambient talk without ending the call */}
           <Button size="xl" variant={v.muted ? "destructive" : "secondary"} className="text-base font-semibold" onClick={v.toggleMute}>
             {v.muted ? <><MicOff size={22} /> Muted — tap to talk</> : <><Mic size={22} /> Mute mic</>}
@@ -296,9 +427,15 @@ export default function Home() {
         </div>
       )}
 
+      {forkPoint != null && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-amber-400/40 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          <span className="flex items-center gap-1.5"><Pencil size={12} /> Editing from here — sending forks a new chat from this point.</span>
+          <button onClick={resetInput} className="shrink-0 rounded p-0.5 hover:bg-amber-500/20" aria-label="Cancel edit"><X size={13} /></button>
+        </div>
+      )}
       <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <Button type="button" variant="outline" size="icon" title="Talk through one of your PRs"
-          onClick={() => { v.requestPRs(); setPrModal(true); }}><GitPullRequest size={15} /></Button>
+          onClick={() => setPrModal(true)}><GitPullRequest size={15} /></Button>
         <Textarea ref={taRef} rows={1} value={draft}
           onChange={(e) => { setDraft(e.target.value); growInput(e.currentTarget); }}
           placeholder={v.thinking && !draft.trim() ? "running — type to steer, or stop →" : "or type…  (Shift+Enter = newline)"}
@@ -319,14 +456,14 @@ export default function Home() {
       {browser && (
         <SessionBrowser
           projects={v.projects} sessions={v.savedSessions}
-          onProject={(cwd, label) => { v.newInProject(cwd, label); setBrowser(false); }}
-          onSession={(s) => { v.openSession(s.id, s.cwd, s.label); setBrowser(false); }}
+          onProject={(cwd, label, engine) => { v.newInProject(cwd, label, engine); setBrowser(false); }}
+          onSession={(s, engine) => { v.openSession(s.id, s.cwd, s.label, engine); setBrowser(false); }}
           onClose={() => setBrowser(false)}
         />
       )}
       {settings && <SettingsModal v={v} onClose={() => setSettings(false)} />}
       {prModal && <PRModal v={v} onClose={() => setPrModal(false)}
-        onPick={(p) => { v.sendText(`Let's walk through my PR #${p.number}: "${p.title}" (${p.url}). Read the diff with gh and explain what it does, then flag anything worth a second look.`); setPrModal(false); }} />}
+        onPick={(p) => { v.sendText(`Let's look at my PR #${p.number}: "${p.title}" (${p.url}). Read the diff with gh to understand the code, then wait for my instructions.`); setPrModal(false); }} />}
     </main>
   );
 }
