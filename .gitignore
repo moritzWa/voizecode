@@ -18,6 +18,9 @@ client/public/*.wasm
 client/public/ort-wasm*.mjs
 client/public/vad.worklet.bundle.min.js
 
+# persisted spoken clips (audio + word timings for replay)
+relay/clips/
+
 # test recordings + Playwright MCP scratch output
 test/artifacts/
 .playwright-mcp/
