@@ -11,7 +11,7 @@ import { spawn, execFile } from "node:child_process";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
-import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
@@ -53,6 +53,8 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   const history = !isCodex && resume ? buildHistory(resume) : null; // prior transcript to show in the viewer
   let claude = null, buf = "", turnText = "";
   let liveSessionId = resume || null; // the Claude session id currently being written (for forking)
+  let claudeReady = false;            // true once the live claude has emitted `init` (safe to send turns)
+  const turnQueue = [];               // turns buffered while claude (re)starts
   let codexProc = null, codexThread = isCodex ? resume : null; // codex: per-turn `exec`, resume by thread id
   let ws = null, hbTimer = null, wdTimer = null, retry = 0, closed = false;
 
@@ -63,7 +65,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     // VOIZE_NO_ANNOUNCE lets the user's Stop hook (done-announce.sh) skip the "finished" sound —
     // we already speak the reply, so the chime is redundant for voizecode sessions.
     const child = spawn("claude", claudeArgs(model, resume), { stdio: ["pipe", "pipe", "inherit"], cwd, env: { ...process.env, VOIZE_NO_ANNOUNCE: "1" } });
-    claude = child; buf = ""; turnText = "";
+    claude = child; buf = ""; turnText = ""; claudeReady = false; // wait for init before sending queued turns
     console.log(`[${sessionId}] spawned claude (${model}${resume ? " resume " + resume.slice(0, 8) : ""}) in ${cwd}`);
     child.stdout.on("data", (d) => { if (child === claude) onStdout(d); });
     child.on("exit", (c) => { if (child === claude) { console.log(`[${sessionId}] claude exited`, c); send({ t: "exit", code: c ?? 0 }); } });
@@ -86,7 +88,10 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   // Fork this chat at a turn boundary: copy the live session's transcript up to (but not
   // including) the userIndex-th user turn into a new session id, then spawn a chat resuming it.
   // Claude continues with the truncated context; the client sends the (edited) message next.
-  function forkChat(userIndex, forkLabel) {
+  // Fork in place: rewind THIS chat to before the userIndex-th user turn and continue with `text`.
+  // Truncates the transcript into a new session, switches our claude to resume it, deletes the old
+  // thread (so the library isn't spammed with forks), and repopulates the same tab.
+  function forkChat(userIndex) {
     if (isCodex) return; // Claude-only
     const id = liveSessionId;
     if (!id) { console.log(`[${sessionId}] fork: no live session id yet`); return; }
@@ -100,9 +105,9 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     for (let i = 0; i < lines.length; i++) {
       let m; try { m = JSON.parse(lines[i]); } catch { continue; }
       if (m.isMeta || m.isSidechain || m.type !== "user" || !m.message?.content) continue;
-      const text = firstUserText(m.message.content).trim();
+      const t = firstUserText(m.message.content).trim();
       const isToolResult = Array.isArray(m.message.content) && m.message.content[0]?.tool_use_id;
-      if (!text || isToolResult || /^<(local-command|command-)/.test(text)) continue;
+      if (!t || isToolResult || /^<(local-command|command-)/.test(t)) continue;
       if (count === userIndex) { cut = i; break; }
       count++;
     }
@@ -111,8 +116,17 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     const dest = join(file.slice(0, file.lastIndexOf("/")), newId + ".jsonl");
     try { writeFileSync(dest, lines.slice(0, cut).join("\n") + "\n"); }
     catch (e) { console.log(`[${sessionId}] fork write failed:`, e.message); return; }
-    console.log(`[${sessionId}] forked at user turn ${userIndex} -> ${newId.slice(0, 8)} (${cut} lines kept)`);
-    createChat({ cwd, resumeId: newId, label: forkLabel || `${label} ↶`, engine: "claude" });
+    resume = newId;
+    const old = claude; startClaude();
+    // Delete the old thread only AFTER the old claude fully exits, else its final SIGINT write
+    // recreates the file we just removed.
+    if (old) { old.stdin.end(); old.once("exit", () => { try { unlinkSync(file); } catch { /* gone */ } }); old.kill("SIGINT"); }
+    else { try { unlinkSync(file); } catch { /* gone */ } }
+    console.log(`[${sessionId}] forked in place at user turn ${userIndex}: ${id.slice(0, 8)} -> ${newId.slice(0, 8)} (${cut} lines kept, old thread will be deleted)`);
+    // Repopulate the same tab with the truncated transcript. The client sends the edited turn via
+    // the relay once our resumed claude is ready (its `meta`), so it arrives through the proven
+    // user_message path and gets echoed as a normal user bubble.
+    send({ t: "history", sessionId, messages: buildHistory(newId) });
   }
 
   // --- Codex engine: one `codex exec` per turn, resuming by thread id (prompt via stdin) ---
@@ -146,8 +160,13 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     }
   }
 
-  const pushTurn = isCodex ? codexTurn : (text) =>
+  // A turn that arrives before claude has emitted its `init` is dropped by claude's stdin reader,
+  // so the first message to a freshly (re)spawned claude — new chat, resume, or fork — silently
+  // never gets a reply. Queue turns until ready, then flush in order.
+  const writeClaude = (text) =>
     claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
+  const flushTurns = () => { while (claudeReady && turnQueue.length) writeClaude(turnQueue.shift()); };
+  const pushTurn = isCodex ? codexTurn : (text) => { turnQueue.push(text); flushTurns(); };
   const interrupt = isCodex
     ? () => { try { codexProc?.kill("SIGINT"); } catch { /* gone */ } }
     : () => claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
@@ -175,7 +194,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
       else if (m.t === "set_model") { switchModel(m.model); }
       else if (m.t === "reset") { resetSession(); }
       else if (m.t === "new_chat") { createChat({ cwd: m.cwd, resumeId: m.resumeId, label: m.label, engine: m.engine }); }
-      else if (m.t === "fork") { forkChat(m.userIndex, m.label); }
+      else if (m.t === "fork") { forkChat(m.userIndex); }
       else if (m.t === "list_sessions") { send({ t: "sessions_list", ...scanSessions() }); }
       else if (m.t === "list_prs") { listPRs(cwd, m.scope, (prs) => send({ t: "prs", prs })); }
       else if (m.t === "close") { // kill this chat for good (UI closed the tab)
@@ -212,6 +231,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   function handle(m) {
     if (m.type === "system" && m.subtype === "init" && m.session_id) {
       liveSessionId = m.session_id;
+      claudeReady = true; flushTurns(); // claude is ready -> send any turns queued during (re)start
       send({ t: "meta", claudeSessionId: m.session_id, cwd }); // for the "copy debug info" button
     } else if (m.type === "stream_event" && m.event?.delta?.text) {
       turnText += m.event.delta.text;

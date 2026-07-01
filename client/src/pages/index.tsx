@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check, Settings, GitPullRequest, Search, Play, Pause, AudioLines, Pencil } from "lucide-react";
@@ -26,21 +26,6 @@ function AgentMessage({ text }: { text: string }) {
       [&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-background [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:font-mono">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </div>
-  );
-}
-
-// Inline markdown for a single narration line (bold + code), rendered without block wrappers.
-function InlineMd({ text }: { text: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        p: ({ children }) => <>{children}</>,
-        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-        code: ({ children }) => <code className="rounded bg-background px-1 font-mono text-[0.9em]">{children}</code>,
-        a: ({ href, children }) => <a href={href} className="text-blue-600 underline dark:text-blue-400">{children}</a>,
-      }}
-    >{text}</ReactMarkdown>
   );
 }
 
@@ -134,6 +119,10 @@ function SettingsModal({ v, onClose }: { v: ReturnType<typeof useVoize>; onClose
         <div className="divide-y px-4 py-2">
           <SettingRow title="Ambient thinking sound" desc="Soft shimmer while the agent is working." on={v.thinkingSound} onChange={v.setThinkingSound} />
           <div className="py-2">
+            <div className="flex items-center justify-between"><div className="text-sm font-medium">Playback speed</div><div className="text-xs text-muted-foreground">{v.rate.toFixed(1)}x</div></div>
+            <Slider min={1} max={3} step={0.1} value={[v.rate]} onValueChange={([r]) => v.setRate(r)} className="mt-2" />
+          </div>
+          <div className="py-2">
             <div className="text-sm font-medium">Default microphone</div>
             <div className="mb-2 text-xs text-muted-foreground">Auto prefers your Studio Display mic, then the MacBook Pro mic. Pick one to pin it.</div>
             <Select value={v.micPref || MIC_AUTO} onValueChange={(val) => v.setMicPref(val === MIC_AUTO ? "auto" : val)}>
@@ -151,28 +140,46 @@ function SettingsModal({ v, onClose }: { v: ReturnType<typeof useVoize>; onClose
   );
 }
 
-// Speechify-style: render a spoken line word-by-word, highlighting the word at playback time `t`.
-// Only the word's core glyphs get the darker pill — trailing punctuation and the inter-word
-// space stay outside it, so a comma or period never sits inside the highlight.
-function SpokenWords({ words, t, fallback }: { words: { text: string; start: number }[]; t: number; fallback: string }) {
-  if (!words.length) return <>{fallback}</>;
+// Split light markdown (**bold**, `code`) into styled words (markers removed), preserving the
+// reading order so word index aligns with the TTS word timings.
+type StyledWord = { text: string; bold?: boolean; code?: boolean };
+function styledWords(text: string): StyledWord[] {
+  const out: StyledWord[] = [];
+  const re = /\*\*([^*]+)\*\*|`([^`]+)`|([^*`]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const seg = m[1] != null ? { v: m[1], bold: true } : m[2] != null ? { v: m[2], code: true } : { v: m[3] };
+    for (const p of seg.v.split(/\s+/)) if (p) out.push({ text: p, bold: seg.bold, code: seg.code });
+  }
+  return out;
+}
+
+// Speechify-style spoken line: renders light markdown (**bold**, `code`) and highlights the word
+// at playback time `t`. The highlight is the active word's own background, so it stays visible even
+// on `code` words (a code word turns periwinkle when read instead of keeping its dark code bg).
+// The inter-word space sits OUTSIDE the styled span, so no trailing space gets the code/highlight bg.
+// Pass words=[] for an inactive line (renders styled text, no highlight).
+function SpokenLine({ words, t, text }: { words: { text: string; start: number }[]; t: number; text: string }) {
+  const sw = useMemo(() => styledWords(text), [text]);
   let active = -1;
   for (let i = 0; i < words.length; i++) { if (words[i].start <= t) active = i; else break; }
   return (
-    <>
-      {words.map((w, i) => {
-        const m = w.text.match(/^(.*?)([.,;:!?)\]"'»]*)$/) ?? [w.text, w.text, ""];
-        const core = m[1] || w.text, tail = m[2] || "";
+    <span>
+      {sw.map((w, i) => {
+        const isActive = i === active;
         return (
           <span key={i}>
-            {i === active && core
-              ? <span className="rounded-[2px] bg-[#c3c4f5] dark:bg-indigo-400/40">{core}</span>
-              : core}
-            {tail}{i < words.length - 1 ? " " : ""}
+            <span className={cn(
+              "rounded-[2px]",
+              w.bold && "font-semibold",
+              w.code && "px-1 font-mono text-[0.9em]",
+              isActive ? "bg-[#c3c4f5] dark:bg-indigo-400/40" : w.code ? "bg-background" : undefined,
+            )}>{w.text}</span>
+            {i < sw.length - 1 ? " " : ""}
           </span>
         );
       })}
-    </>
+    </span>
   );
 }
 
@@ -287,39 +294,39 @@ export default function Home() {
 
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col gap-3 p-4">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <header className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-lg font-semibold">voizecode</h1>
           <Button size="sm" onClick={openBrowser} title="Open or start a chat">
             <Plus size={13} /> New chat
           </Button>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
-          <Select value={v.model} onValueChange={v.setModel}>
-            <SelectTrigger className="w-[88px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="haiku">haiku</SelectItem>
-              <SelectItem value="sonnet">sonnet</SelectItem>
-              <SelectItem value="opus">opus</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={v.voice} onValueChange={v.setVoice}>
-            <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy debug info (project, chat, claude session id)"
-            onClick={async () => { await v.copyDebug(); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>
-            {copied ? <Check size={14} className="text-green-600" /> : <ClipboardCopy size={14} />}
-          </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings" onClick={() => setSettings(true)}>
-            <Settings size={14} />
-          </Button>
-          <span className={v.connected ? "text-green-600 dark:text-green-400" : "text-destructive"}>
-            {v.connected ? "connected" : "connecting…"}
-          </span>
-          {v.thinking && <span className="flex items-center gap-1 text-blue-600 dark:text-blue-400"><Loader2 size={13} className="animate-spin" /> working…</span>}
+          <div className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className={cn("whitespace-nowrap", v.connected ? "text-green-600 dark:text-green-400" : "text-destructive")}>
+              {v.connected ? "connected" : "connecting…"}
+            </span>
+            {v.thinking && <Loader2 size={14} className="animate-spin text-blue-600 dark:text-blue-400" />}
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy debug info (project, chat, claude session id)"
+              onClick={async () => { await v.copyDebug(); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>
+              {copied ? <Check size={14} className="text-green-600" /> : <ClipboardCopy size={14} />}
+            </Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings" onClick={() => setSettings(true)}>
+              <Settings size={14} />
+            </Button>
+            <Select value={v.model} onValueChange={v.setModel}>
+              <SelectTrigger className="h-7 w-[92px] text-xs" title="Claude model"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="haiku">haiku</SelectItem>
+                <SelectItem value="sonnet">sonnet</SelectItem>
+                <SelectItem value="opus">opus</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={v.voice} onValueChange={v.setVoice}>
+              <SelectTrigger className="h-7 w-[140px] text-xs" title="Narrator voice"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </header>
 
@@ -367,7 +374,7 @@ export default function Home() {
                   title={l.key ? "Click to replay" : undefined}
                   className={cn("break-words rounded px-1 py-0.5 text-sm transition-colors",
                     active ? "bg-[#e7e6fb] dark:bg-indigo-400/15" : l.key && "cursor-pointer hover:bg-muted")}>
-                  {active && words ? <SpokenWords words={words} t={v.speakingTime} fallback={l.text} /> : <InlineMd text={l.text} />}
+                  <SpokenLine words={active && words?.length ? words : []} t={active ? v.speakingTime : 0} text={l.text} />
                 </div>
               );
             }
@@ -391,37 +398,19 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <label className="whitespace-nowrap">speed {v.rate.toFixed(1)}x</label>
-        <Slider min={1} max={3} step={0.1} value={[v.rate]} onValueChange={([r]) => v.setRate(r)} className="flex-1" />
-      </div>
-
-      {v.mics.length > 0 && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={v.togglePlayback}
-            title={v.paused ? "Resume playback" : "Pause playback (click a line to replay)"} aria-label="Pause or play">
-            {v.paused ? <Play size={14} /> : <Pause size={14} />}
-          </Button>
-          <Mic size={14} className="shrink-0" />
-          <Select value={v.micPref || MIC_AUTO} onValueChange={(val) => v.setMicPref(val === MIC_AUTO ? "auto" : val)}>
-            <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={MIC_AUTO}>Auto (Studio Display → MacBook Pro)</SelectItem>
-              {v.mics.map((m) => <SelectItem key={m.id} value={m.label}>{m.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
       {v.micError && <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{v.micError}</div>}
 
       {!v.live ? (
-        <div className="flex flex-col gap-2">
-          <Button variant="success" size="xl" onClick={() => v.start()}>
+        <div className="flex gap-2">
+          <Button variant="success" size="xl" className="flex-1" onClick={() => v.start()}>
             <Mic size={18} /> Start call
           </Button>
-          <Button variant="outline" size="xl" className="font-semibold" onClick={() => v.start(true)}>
-            <AudioLines size={18} /> Start with a ramble
+          <Button variant="outline" size="xl" className="flex-1 font-semibold" onClick={() => v.start(true)}>
+            <AudioLines size={18} /> Ramble
+          </Button>
+          <Button variant="outline" size="xl" className="px-4" onClick={v.togglePlayback}
+            title={v.paused ? "Resume" : "Pause (or click a line to replay)"} aria-label="Play or pause">
+            {v.paused ? <Play size={18} /> : <Pause size={18} />}
           </Button>
         </div>
       ) : (
@@ -438,6 +427,10 @@ export default function Home() {
             {v.muted ? <><MicOff size={22} /> Muted — tap to talk</> : <><Mic size={22} /> Mute mic</>}
           </Button>
           <div className="flex gap-2">
+            <Button variant="outline" className="px-4" onClick={v.togglePlayback}
+              title={v.paused ? "Resume" : "Pause (or click a line to replay)"} aria-label="Play or pause">
+              {v.paused ? <Play size={15} /> : <Pause size={15} />}
+            </Button>
             <Button variant="secondary" className="flex-1" onClick={v.stop}><Square size={15} /> Stop</Button>
             <Button className="flex-1 bg-amber-500 text-white hover:bg-amber-600" onClick={v.interruptNow}><Hand size={15} /> Interrupt</Button>
           </div>
@@ -446,7 +439,7 @@ export default function Home() {
 
       {forkPoint != null && (
         <div className="flex items-center justify-between gap-2 rounded-md border border-amber-400/40 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-          <span className="flex items-center gap-1.5"><Pencil size={12} /> Editing from here — sending forks a new chat from this point.</span>
+          <span className="flex items-center gap-1.5"><Pencil size={12} /> Editing from here — sending rewinds the chat to this point (the rest is discarded).</span>
           <button onClick={resetInput} className="shrink-0 rounded p-0.5 hover:bg-amber-500/20" aria-label="Cancel edit"><X size={13} /></button>
         </div>
       )}

@@ -8,6 +8,8 @@
 // Cloudflare R2 backend later is one new class behind this interface + a `case` in the
 // factory; no call site changes.
 
+import { AwsClient } from "npm:aws4fetch@1.0.20";
+
 export interface BlobStore {
   put(key: string, data: Uint8Array, contentType?: string): Promise<void>;
   get(key: string): Promise<Uint8Array | null>;
@@ -45,12 +47,50 @@ class LocalDiskStore implements BlobStore {
   }
 }
 
-// Selected once at boot. CLIP_STORE picks the backend (only "local" today); CLIP_DIR is the
-// local-disk base directory. A future "gcs"/"r2" case constructs its own BlobStore here.
+// Cloudflare R2 over its S3-compatible API (works from any runtime, incl. Deno Deploy where
+// there's no disk). aws4fetch signs the requests; endpoint is <account>.r2.cloudflarestorage.com.
+class R2Store implements BlobStore {
+  private aws: AwsClient;
+  private base: string;
+  constructor(accountId: string, accessKeyId: string, secretAccessKey: string, bucket: string) {
+    this.aws = new AwsClient({ accessKeyId, secretAccessKey, region: "auto", service: "s3" });
+    this.base = `https://${accountId}.r2.cloudflarestorage.com/${bucket}`;
+  }
+  private req(key: string, init?: RequestInit) { return new Request(`${this.base}/${sanitize(key)}`, init); }
+  async put(key: string, data: Uint8Array, contentType?: string) {
+    const r = await this.aws.fetch(this.req(key, { method: "PUT", body: data as BodyInit, headers: contentType ? { "content-type": contentType } : undefined }));
+    if (!r.ok) throw new Error(`r2 put ${r.status}`);
+  }
+  async get(key: string): Promise<Uint8Array | null> {
+    const r = await this.aws.fetch(this.req(key));
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`r2 get ${r.status}`);
+    return new Uint8Array(await r.arrayBuffer());
+  }
+  async exists(key: string): Promise<boolean> {
+    const r = await this.aws.fetch(this.req(key, { method: "HEAD" }));
+    if (r.status === 404) return false;
+    if (!r.ok) throw new Error(`r2 head ${r.status}`);
+    return true;
+  }
+  async remove(key: string) {
+    const r = await this.aws.fetch(this.req(key, { method: "DELETE" }));
+    if (!r.ok && r.status !== 404) throw new Error(`r2 delete ${r.status}`);
+  }
+}
+
+// Selected once at boot. CLIP_STORE forces a backend; otherwise auto: R2 when its creds are
+// present (deploy), else local disk (dev). CLIP_DIR is the local-disk base directory.
 export function makeBlobStore(): BlobStore {
-  const kind = Deno.env.get("CLIP_STORE") ?? "local";
+  const kind = Deno.env.get("CLIP_STORE") ?? (Deno.env.get("R2_ACCESS_KEY_ID") ? "r2" : "local");
   switch (kind) {
     case "local": return new LocalDiskStore(Deno.env.get("CLIP_DIR") ?? "./clips");
+    case "r2": return new R2Store(
+      Deno.env.get("R2_ACCOUNT_ID") ?? "",
+      Deno.env.get("R2_ACCESS_KEY_ID") ?? "",
+      Deno.env.get("R2_SECRET_ACCESS_KEY") ?? "",
+      Deno.env.get("R2_BUCKET") ?? "voizecode-clips",
+    );
     default: throw new Error(`unknown CLIP_STORE: ${kind}`);
   }
 }

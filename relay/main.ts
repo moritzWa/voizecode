@@ -61,7 +61,10 @@ const PINNED_TOKEN = Deno.env.get("VOIZE_TOKEN") ?? "";
 const AUTH_ON = !!Deno.env.get("DENO_DEPLOYMENT_ID") || !!PINNED_TOKEN || Deno.env.get("VOIZE_AUTH") === "1";
 let requiredToken: string = PINNED_TOKEN;
 let narration: "narrate" | "final-only" | "silent" = "narrate";
-let ttsVoice = (Deno.env.get("VOIZE_VOICE") ?? "alloy").toLowerCase(); // OpenAI TTS voice, set from the client
+// Selected TTS voice from the client. For ElevenLabs this is a voice ID (case-sensitive); for the
+// OpenAI fallback we coerce to a valid OpenAI voice. Empty -> provider default.
+let ttsVoice = Deno.env.get("VOIZE_VOICE") ?? "";
+const OPENAI_VOICES = new Set(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
 
 function getSession(id: string): Session {
   let s = sessions.get(id);
@@ -239,7 +242,7 @@ async function speak(s: Session, text: string) {
     const r = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "tts-1", voice: ttsVoice, input: spoken, response_format: "mp3" }),
+      body: JSON.stringify({ model: "tts-1", voice: OPENAI_VOICES.has(ttsVoice) ? ttsVoice : "alloy", input: spoken, response_format: "mp3" }),
     });
     if (!r.ok || !r.body) throw new Error(`openai tts ${r.status}`);
     const reader = r.body.getReader();
@@ -256,7 +259,7 @@ async function speak(s: Session, text: string) {
   };
   // ElevenLabs with per-character timestamps -> derive word start times for Speechify-style highlight.
   const elevenLabs = async () => {
-    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${EL_VOICE}/with-timestamps?output_format=mp3_44100_128`, {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ttsVoice || EL_VOICE}/with-timestamps?output_format=mp3_44100_128`, {
       method: "POST",
       headers: { "xi-api-key": EL_KEY, "Content-Type": "application/json" },
       body: JSON.stringify({ text: spoken, model_id: EL_MODEL }),
@@ -340,16 +343,18 @@ const NARRATE_SYSTEM =
   "mirror any emphasis the original already had. " +
   "No greetings, no meta-commentary, no filler. Output only the spoken adaptation.";
 
-// Split a buffer into complete sentences. Terminators inside a backtick code span are ignored
-// (so `email ?? ""` or `arr.length` never break a clip mid-expression); a `.`/`!`/`?` is only a
+// Split a buffer into complete sentences. Terminators inside a `code` span or a **bold** span are
+// ignored (so `email ?? ""` never breaks a clip, and a **bold heading.** isn't split mid-markup,
+// which would leave an unbalanced `**` rendering literally on the client); a `.`/`!`/`?` is only a
 // boundary when the next char is whitespace or end of buffer (keeps decimals like 3.14 intact).
 function takeSentences(b: string): { done: string[]; rest: string } {
   const done: string[] = [];
-  let start = 0, tick = false;
+  let start = 0, tick = false, bold = false;
   for (let i = 0; i < b.length; i++) {
     const c = b[i];
     if (c === "`") { tick = !tick; continue; }
-    if (tick || (c !== "." && c !== "!" && c !== "?")) continue;
+    if (!tick && c === "*" && b[i + 1] === "*") { bold = !bold; i++; continue; } // toggle on each **
+    if (tick || bold || (c !== "." && c !== "!" && c !== "?")) continue;
     let j = i;
     while (j + 1 < b.length && ".!?".includes(b[j + 1])) j++; // consume "?!" / "..." runs
     const after = b[j + 1];
@@ -436,7 +441,7 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
 function handleClient(m: Record<string, unknown>) {
   if (m.t === "hello") { replay(typeof m.since === "number" ? m.since : 0); broadcastSessions(); return; }
   if (m.t === "set_narration") { narration = m.mode as typeof narration; return; }
-  if (m.t === "set_voice") { ttsVoice = String(m.voice).toLowerCase(); console.log("[relay] voice ->", ttsVoice); return; }
+  if (m.t === "set_voice") { ttsVoice = String(m.voice); console.log("[relay] voice ->", ttsVoice); return; }
   if (m.t === "get_clip") { void serveClip(String(m.key)); return; }
   const s = m.sessionId ? sessions.get(m.sessionId as string) : undefined;
   if (!s) return;
@@ -458,7 +463,7 @@ function handleClient(m: Record<string, unknown>) {
       }
       break;
     case "new_session": toAgent(s, { t: "new_chat", cwd: m.cwd, resumeId: m.resumeId, label: m.label, engine: m.engine }); break;
-    case "fork": toAgent(s, { t: "fork", userIndex: m.userIndex, label: m.label }); break;
+    case "fork": toAgent(s, { t: "fork", userIndex: m.userIndex, text: m.text }); break;
     case "list_sessions": toAgent(s, { t: "list_sessions" }); break;
     case "list_prs": toAgent(s, { t: "list_prs", scope: m.scope }); break;
     case "close_session": // tell the agent to kill that chat, drop the session, remove the tab
@@ -476,7 +481,9 @@ function replay(since: number) {
 // ====================================================================
 // WebSocket server
 // ====================================================================
-Deno.serve({ port: PORT }, (req) => {
+// On Deno Deploy the platform assigns the port (Deno.serve with no port option); locally we bind PORT.
+const onDeploy = !!Deno.env.get("DENO_DEPLOYMENT_ID");
+Deno.serve(onDeploy ? {} : { port: PORT }, (req) => {
   if (req.headers.get("upgrade") !== "websocket") return new Response("voizecode relay up");
   // idleTimeout: Deno auto-pings and drops a socket with no traffic for this long —
   // backstop that reaps half-open sockets left by a network change. App-level

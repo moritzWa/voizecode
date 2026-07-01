@@ -31,15 +31,20 @@ function resolveMic(mics: { id: string; label: string }[], pref: string): string
   for (const p of DEFAULT_MIC_PRIORITY) { const m = find(p); if (m) return m.id; }
   return "";
 }
-// OpenAI tts-1 voices (default TTS provider). Pick in the UI; the relay applies it.
+// ElevenLabs premade voices (the active TTS provider). id = EL voice ID; the relay applies it.
 export const VOICES = [
-  { id: "alloy", label: "alloy — neutral" },
-  { id: "echo", label: "echo — clear" },
-  { id: "fable", label: "fable — expressive" },
-  { id: "onyx", label: "onyx — deep" },
-  { id: "nova", label: "nova — bright ♀" },
-  { id: "shimmer", label: "shimmer — soft ♀" },
+  { id: "EXAVITQu4vr4xnSDxMaL", label: "Sarah ♀" },
+  { id: "9BWtsMINqrJLrRacOk9x", label: "Aria ♀" },
+  { id: "FGY2WhTYpPnrIDTdsKH5", label: "Laura ♀" },
+  { id: "XB0fDUnXU5powFXDhCwa", label: "Charlotte ♀" },
+  { id: "pFZP5JQG7iQjIQuC4Bku", label: "Lily ♀" },
+  { id: "JBFqnCBsd6RMkjVDRZzb", label: "George ♂" },
+  { id: "nPczCjzI2devNBz1zQrb", label: "Brian ♂" },
+  { id: "bIHbv24MWmeRgasZH58o", label: "Will ♂" },
+  { id: "TX3LPaxmHKxFdv7VOQHJ", label: "Liam ♂" },
+  { id: "SAz9YHcvj6GT2YYXdXww", label: "River ⚥" },
 ];
+export const DEFAULT_VOICE = VOICES[0].id;
 
 export type Line = { kind: "user" | "agent" | "status" | "speech"; text: string; clip?: number; key?: string };
 export type SessionInfo = { sessionId: string; label: string; model: string };
@@ -83,7 +88,7 @@ export function useVoize() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
   const [prs, setPrs] = useState<{ number: number; title: string; url: string; createdAt: string; isDraft: boolean; author?: string }[]>([]);
   const [metas, setMetas] = useState<Record<string, { claudeSessionId: string; cwd: string }>>({}); // debug info per chat
-  const [voice, setVoiceState] = useState("alloy");
+  const [voice, setVoiceState] = useState(DEFAULT_VOICE);
   const voiceRef = useRef(voice);
   const [mics, setMics] = useState<{ id: string; label: string }[]>([]);
   const [micPref, setMicPrefState] = useState(""); // preferred mic LABEL ("" = auto / priority list)
@@ -97,7 +102,7 @@ export function useVoize() {
   const wdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);   // silence watchdog
   const retry = useRef(0);                                              // backoff attempt count
   const wantNew = useRef(false);                                        // auto-focus the next new session
-  const forkPending = useRef<string | null>(null);                      // edited text to send once a forked chat focuses
+  const forkSend = useRef<{ sid: string; text: string } | null>(null);  // edited turn to send once a fork's claude is ready
   const knownIds = useRef<Set<string>>(new Set());                      // sessions seen so far
   const activeRef = useRef(activeId);
   const rateRef = useRef(rate);
@@ -118,11 +123,14 @@ export function useVoize() {
   const replayQ = useRef<{ key: string; clip: number }[]>([]);
   const replayAudio = useRef<Record<string, { b64: string; words: { text: string; start: number }[] }>>({});
   const replayNext = useRef(0);
+  const replaying = useRef(false); // a continuous replay is active -> suppress live audio so it can't override the queue
 
   useEffect(() => { activeRef.current = activeId; }, [activeId]);
   useEffect(() => { rateRef.current = rate; player.current?.setRate(rate); }, [rate]);
   useEffect(() => {
-    const v = (typeof window !== "undefined" && localStorage.getItem(VOICE_KEY)) || "alloy";
+    const stored = typeof window !== "undefined" ? localStorage.getItem(VOICE_KEY) : null;
+    // Migrate stale values (e.g. old OpenAI names) to a valid ElevenLabs voice.
+    const v = stored && VOICES.some((x) => x.id === stored) ? stored : DEFAULT_VOICE;
     setVoiceState(v); voiceRef.current = v;
     const savedPref = (typeof window !== "undefined" && localStorage.getItem(MICPREF_KEY)) || "";
     setMicPrefState(savedPref); micPrefRef.current = savedPref;
@@ -159,7 +167,7 @@ export function useVoize() {
   useEffect(() => {
     const p = new ClipPlayer(
       markSpeaking,
-      (clip) => { setSpeakingClip(clip); setSpeakingTime(0); setPaused(false); }, // new clip -> reset highlight + un-pause
+      (clip) => { setSpeakingClip(clip); setSpeakingTime(0); setPaused(false); if (clip === null) replaying.current = false; }, // new clip -> reset highlight + un-pause; idle -> end replay
       (_clip, t) => setSpeakingTime(t),                          // playback progress -> advance highlight
     );
     p.setRate(rateRef.current); // apply the initial speed (default 2x) before the first clip plays
@@ -170,7 +178,7 @@ export function useVoize() {
   const stopAudio = useCallback(() => {
     player.current?.stop(); tone.current?.stop(); markSpeaking(false);
     setPaused(false);
-    replayQ.current = []; replayNext.current = 0; // cancel any in-flight continuous replay
+    replayQ.current = []; replayNext.current = 0; replaying.current = false; // cancel any in-flight continuous replay
     vadPending.current = false;
     if (vadResumeTimer.current) clearTimeout(vadResumeTimer.current);
   }, []);
@@ -243,13 +251,16 @@ export function useVoize() {
             // may collide with a stale persisted transcript. Clear it; a resumed/forked chat's
             // `history` message arrives right after and repopulates, so resumes are unaffected.
             setConvos((p) => ({ ...p, [id]: [] }));
-            if (forkPending.current) { const t = forkPending.current; forkPending.current = null; send({ t: "text", sessionId: id, text: t }); }
           }
           break;
         }
         case "model": setSessions((p) => p.map((s) => s.sessionId === sid ? { ...s, model: normModel(m.model) } : s)); break;
         case "sessions_list": setSavedSessions(m.sessions || []); setProjects(m.projects || []); break;
-        case "meta": setMetas((p) => ({ ...p, [sid]: { claudeSessionId: m.claudeSessionId, cwd: m.cwd } })); break;
+        case "meta":
+          setMetas((p) => ({ ...p, [sid]: { claudeSessionId: m.claudeSessionId, cwd: m.cwd } }));
+          // a fork's resumed claude just became ready -> deliver the edited turn via the relay
+          if (forkSend.current && forkSend.current.sid === sid) { const t = forkSend.current.text; forkSend.current = null; send({ t: "text", sessionId: sid, text: t }); }
+          break;
         case "words": setClipWords((p) => ({ ...p, [m.clip]: m.words })); break;
         case "prs": setPrs(m.prs || []); break;
         case "history": { // resumed transcript -> fill the viewer
@@ -277,6 +288,7 @@ export function useVoize() {
         case "status": flushAgent(sid); addLine(sid, { kind: "status", text: m.text }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
         case "speech_text": flushAgent(sid); addLine(sid, { kind: "speech", text: m.text, clip: m.clip, key: m.key }); if (!isActive) setUnread((p) => ({ ...p, [sid]: true })); break;
         case "audio_chunk":
+          if (isActive && replaying.current) break; // a continuous replay owns the player right now
           if (isActive) player.current?.pushChunk(m.clip, b64ToBytes(m.b64));
           else { // hold it: play when the user focuses this session
             const q = (pending.current[sid] ||= []);
@@ -286,6 +298,7 @@ export function useVoize() {
           }
           break;
         case "audio_end":
+          if (isActive && replaying.current) break;
           if (isActive) player.current?.endClip(m.clip);
           else (pending.current[sid] ||= []).push({ c: m.clip, e: true });
           break;
@@ -349,7 +362,8 @@ export function useVoize() {
   // ---- mic capture + VAD barge-in ----
   const start = useCallback(async (ramble = false) => {
     setMicError("");
-    setMuted(false); mutedRef.current = false; // fresh call starts unmuted
+    // Call mode starts muted (tap to talk); rambling opens the mic immediately.
+    setMuted(!ramble); mutedRef.current = !ramble;
     let s: MediaStream;
     try {
       const audio: MediaTrackConstraints = { channelCount: 1, sampleRate: MIC_SR, echoCancellation: true, noiseSuppression: true };
@@ -435,17 +449,28 @@ export function useVoize() {
   // Toggling off flushes the whole buffer to the model as one turn. Needs the mic open.
   const setRamble = useCallback((on: boolean) => {
     setRambling(on); ramblingRef.current = on;
-    if (on && mutedRef.current) { setMuted(false); mutedRef.current = false; }
+    // Rambling opens the mic; ending it drops back to muted call mode (no hot mic recording you).
+    setMuted(!on); mutedRef.current = !on;
     send({ t: "ramble", sessionId: activeRef.current, on });
   }, []);
   const toggleRamble = useCallback(() => setRamble(!ramblingRef.current), [setRamble]);
-  // Fork (rewind-lite, Claude only): spawn a new chat resuming context truncated before the
-  // userIndex-th user turn, then send the edited message into it once it focuses.
+  // Fork in place (rewind-lite, Claude only): rewind THIS chat to before the userIndex-th user
+  // turn and continue with `text`. The agent truncates context + drops the old thread + restarts
+  // claude; we optimistically truncate the view, then send the edited turn through the relay once
+  // the resumed claude signals ready (its `meta`), so it arrives via the proven user_message path.
   const forkChat = useCallback((userIndex: number, text: string) => {
-    wantNew.current = true;
-    forkPending.current = text;
-    send({ t: "fork", sessionId: activeRef.current, userIndex });
-  }, []);
+    const sid = activeRef.current;
+    forkSend.current = { sid, text };
+    send({ t: "fork", sessionId: sid, userIndex, text });
+    stopAudio();
+    setConvos((p) => {
+      const ls = p[sid] || [];
+      let seen = 0, cut = ls.length;
+      for (let i = 0; i < ls.length; i++) { if (ls[i].kind === "user") { if (seen === userIndex) { cut = i; break; } seen++; } }
+      return { ...p, [sid]: ls.slice(0, cut) };
+    });
+    setThinking((p) => ({ ...p, [sid]: true }));
+  }, [stopAudio]);
   // Replay from a spoken line onward: play the clicked line and every following spoken line to the
   // end of the turn, highlighting each in sequence (Speechify-style continuous read).
   const replayClip = useCallback((line: Line) => {
@@ -458,6 +483,7 @@ export function useVoize() {
       .map((l) => ({ key: l.key as string, clip: l.clip as number }));
     if (!queue.length) return;
     stopAudio();
+    replaying.current = true; // block live streaming audio from hijacking the replay
     replayQ.current = queue; replayAudio.current = {}; replayNext.current = 0;
     for (const item of queue) send({ t: "get_clip", key: item.key });
   }, [convos, stopAudio]);

@@ -31,7 +31,7 @@ export type ClientToRelay =
   | { t: "list_prs"; sessionId: string; scope?: "mine" | "all" } // ask the agent for the chat repo's PRs (yours, or all)
   | { t: "get_clip"; key: string }                  // replay a persisted clip: fetch its stored audio + words
   | { t: "ramble"; sessionId: string; on: boolean } // hold/dictation mode: on = accumulate (no auto-commit); off = flush buffer as one turn
-  | { t: "fork"; sessionId: string; userIndex: number; label?: string } // fork the chat: new session resuming context truncated before the userIndex-th user turn (Claude only)
+  | { t: "fork"; sessionId: string; userIndex: number; text: string } // fork in place: truncate this chat's context before the userIndex-th user turn, delete the old thread, continue with `text` (Claude only)
   | { t: "ping" };                                  // heartbeat; relay replies { t: "pong" }
 
 // ---- agent (laptop) -> relay ----
@@ -88,7 +88,7 @@ export type RelayToAgent =
   | { t: "set_model"; model: ClaudeModel }
   | { t: "reset" }                      // respawn claude = fresh context
   | { t: "new_chat"; cwd?: string; resumeId?: string; label?: string; engine?: string } // spawn a chat (cwd, resume, engine)
-  | { t: "fork"; userIndex: number; label?: string } // fork this chat at a turn boundary into a new resumed chat
+  | { t: "fork"; userIndex: number; text: string } // fork this chat in place at a turn boundary, continue with `text`
   | { t: "close" }                      // kill this chat (claude + socket)
   | { t: "list_sessions" }              // scan + return past sessions/projects
   | { t: "list_prs"; scope?: "mine" | "all" } // list the repo's PRs (yours, or all)
