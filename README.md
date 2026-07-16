@@ -16,21 +16,29 @@ it, so I'll add one first."* That's pair-programming, not terminal-watching.
 - [x] Desktop: voice loop, narrator, multi-chat, cross-directory session browser, PR context, Electron app
 - [x] Word-level (Speechify-style) highlighting synced to speech
 - [x] Selectable engines: Codex CLI alongside Claude Code (pick per chat)
-- [ ] Mobile: pair the phone to the desktop via QR/token, voice in/out over the relay (desktop stays online)
+- [x] Mobile: phone talks to the laptop from anywhere (cellular) via the deployed relay + access-token URL
+- [x] Click-to-replay with continuous read-through (clips persisted to R2, no re-synthesis)
 - [ ] Playback controls by voice (pause / continue / slower / "explain that again")
+- [ ] iOS lock-screen mode: keep audio + mic alive with the screen off (persistent `<audio>` + MediaSession)
 - [ ] Faster narrator path
 - [ ] One-command install + 30-second demo
 
 ## Architecture (3 tiers, relay in the middle)
 
 ```
-   LAPTOP (home)              RELAY (Deno, always-on)        CLIENT (browser/phone)
-┌──────────────────┐       ┌─────────────────────┐       ┌────────────────────┐
-│ voizecode.mjs    │       │  - STT  (Deepgram)  │       │  Next.js           │
-│  spawns claude   │◄─────►│  - narrate (nano)   │◄─────►│  mic + audio@speed │
-│  stream-json     │ conn A│  - TTS  (streamed)  │ conn B│  text + barge-in   │
-│  + interrupt     │       │  - seq buffer/replay│       │  multi-session tabs│
-└──────────────────┘       └─────────────────────┘       └────────────────────┘
+   LAPTOP (yours)                 RELAY (Deno Deploy)                 CLIENT (browser/phone)
+┌─────────────────────┐      ┌───────────────────────────┐      ┌─────────────────────────┐
+│ voizecode.mjs       │      │ STT   Deepgram streaming  │      │ Next.js web app         │
+│  one claude/codex   │      │       + endpointing       │      │  mic 16k PCM + VAD      │
+│  child per chat     │◄────►│ narrate  gpt-4.1-nano     │◄────►│  audio @1–3x (pitch-    │
+│  (stream-json,      │conn A│ TTS   ElevenLabs w/ word  │conn B│   preserved), barge-in  │
+│   interrupt, fork,  │ wss  │       timings → OpenAI    │ wss  │  word-sync highlighting │
+│   resume, PR list)  │      │       fallback            │      │  click-to-replay        │
+│ caffeinate wrapper  │      │ clips → R2  (replay w/o   │      │  chat tabs, transcripts │
+│ (Mac stays awake)   │      │       re-synthesis)       │      │   in localStorage       │
+└─────────────────────┘      │ seq buffer + replay       │      │  access key (?key=…)    │
+                             │ access gate (token)       │      └─────────────────────────┘
+                             └───────────────────────────┘
 ```
 
 Two independent WebSocket connections, each with heartbeat + watchdog + backoff reconnect.
@@ -42,9 +50,15 @@ relay can restart and both ends self-heal. (More robust than a single tunnel.)
 - You talk → Deepgram STT → a whole utterance goes straight to claude (no translator agent).
 - claude streams text + tool calls. Tool calls → light spoken status ("editing auth.ts").
   End of turn → `gpt-4.1-nano` compresses the reply into 1-3 spoken sentences.
-- **Streaming TTS:** OpenAI streams mp3 as it's generated; the relay forwards byte chunks; the
-  client appends them to a `MediaSource` so audio starts before a sentence finishes. Playback is
-  through an `<audio>` element, so the speed slider (1–3x) stays **pitch-preserved**.
+- **Streaming TTS:** ElevenLabs synthesizes with **per-word timestamps** (that's what drives the
+  Speechify-style highlighting); OpenAI is the automatic fallback (no timings). The relay forwards
+  byte chunks; the client appends them to a `MediaSource` so audio starts before a sentence
+  finishes. Playback is through an `<audio>` element, so the speed slider (1–3x) stays
+  **pitch-preserved**.
+- **Clips & replay:** every spoken sentence is persisted (audio + word timings) to Cloudflare R2.
+  Clicking a past line replays from there through the end of the turn — fetched, never re-synthesized,
+  so replay costs no TTS credits. Lines from a *resumed* session's history were never spoken, have no
+  clips, and aren't clickable.
 - **Barge-in:** talking over the agent (Silero VAD) stops audio AND interrupts claude mid-turn;
   your next utterance redirects the same session.
 - **Multi-session:** run the laptop CLI in several repos → one tab each. The active tab gets the
@@ -71,10 +85,20 @@ Open http://localhost:3030 in Chrome, hit **Start call**, talk. The agent runs o
 open/resume Claude Code sessions in any project via **+ New chat** — no need to launch it
 per-repo. To use it from your phone on the same wifi, open `http://<laptop-LAN-IP>:3030` in Safari.
 
-### `voize` command (start from anywhere)
+### `voize` command (production — phone from anywhere)
 
-`bin/voize` starts the services (if needed), opens a chat in the **current directory**, and opens
-the web app. Add an alias: `alias voize="$HOME/CODE/voizecode/bin/voize"`, then run `voize` in any repo.
+`bin/voize` is **production mode**: it starts the laptop agent against the *deployed* relay
+(wrapped in `caffeinate` so the Mac won't sleep while it runs) and prints the phone URL with the
+access key. Run it in any repo to open a chat there; run it again elsewhere to add a tab. Install:
+`ln -s "$PWD/bin/voize" /opt/homebrew/bin/voize` (same for `voize-dev`).
+
+To rotate the access key (e.g. after it appears in a screen recording):
+`rm ~/.voizecode/token && pkill -f voizecode.mjs && voize`.
+
+### `voize-dev` (local stack)
+
+The old all-local flow: starts relay + client + agent on localhost (or the Electron desktop app
+if its deps are installed). Use this for development.
 
 ### Desktop app (Electron)
 
@@ -82,6 +106,23 @@ the web app. Add an alias: `alias voize="$HOME/CODE/voizecode/bin/voize"`, then 
 First time: `cd electron && npm install`. If Electron's binary extracts incompletely (a known
 `@electron/get` issue with the framework symlinks), unzip the cached zip manually:
 `unzip -o ~/Library/Caches/electron/*/electron-*.zip -d node_modules/electron/dist && printf 'Electron.app/Contents/MacOS/Electron' > node_modules/electron/path.txt`.
+
+## Deploy
+
+Both cloud tiers live on Deno Deploy (`relay/deno.json` / `client/deno.jsonc` name the apps):
+
+```bash
+cd relay  && deno deploy --prod    # wss://voizecode-relay.<org>.deno.net
+cd client && deno deploy --prod    # https://voizecode-web.<org>.deno.net  (builds Next in the cloud)
+```
+
+Relay env (set with `deno deploy env add`): `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`,
+`ELEVENLABS_API_KEY` (optional — presence selects ElevenLabs TTS), `CLIP_STORE=r2` + `R2_*` creds,
+`VOIZE_TOKEN` (pins the access code). The client bakes `NEXT_PUBLIC_RELAY_WS` in at **build time**,
+so it must be set in the web app's env before deploying.
+
+The relay's plain-HTTP response (`curl` the relay URL) reports its isolate id — useful because of
+the known multi-isolate caveat below.
 
 ## Tests
 
@@ -97,6 +138,12 @@ node test/durability.mjs  # heartbeat, replay-on-reconnect, full relay-restart s
 - Access gate: off for local dev; auto-on when deployed (Deno Deploy) or when `VOIZE_TOKEN` is set.
   The laptop agent generates a code (`~/.voizecode/token`) and prints a `?key=…` URL; the relay adopts it
   and the web app stores it in `localStorage`. `--dangerously-skip-permissions` makes this a must before exposing.
-- For phone-on-cellular: deploy the relay (e.g. Deno Deploy) and point both ends at it.
-- Lock-screen audio on iOS needs MediaSession + continuous playback (web app, future-mobile work).
+- **Known issue — Deno Deploy multi-isolate:** relay state (sessions, client slot) is in-memory and
+  per-isolate; under churn (redeploys, reconnects) the agent and phone can land on *different*
+  isolates and stop seeing each other ("no projects found", dropped turns). Recovery: restart the
+  agent, reload the phone tab. Planned fix: BroadcastChannel bridge (verified available on the new
+  Deno Deploy despite docs saying Classic-only).
+- Lock-screen audio on iOS is buildable in a plain Safari tab (research verified: persistent
+  `<audio>` element + silent-loop gap bridging + MediaSession; mic capture survives lock in Safari,
+  no WebRTC needed — AudioContext needs an `interrupted`-state resume loop). Not yet implemented.
 - Mic uses the deprecated ScriptProcessor; move to AudioWorklet.
