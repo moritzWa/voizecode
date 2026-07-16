@@ -26,23 +26,23 @@ it, so I'll add one first."* That's pair-programming, not terminal-watching.
 ## Architecture (3 tiers, relay in the middle)
 
 ```
-   LAPTOP (yours)                       RELAY (Deno Deploy)                    CLIENT (browser/phone)
-┌────────────────────────┐        ┌──────────────────────────────┐        ┌────────────────────────────┐
-│  voizecode.mjs         │        │  STT      Deepgram streaming │        │  Next.js web app           │
-│   one claude/codex     │        │           + endpointing      │        │                            │
-│   child per chat       │        │                              │        │  mic 16k PCM + VAD         │
-│   (stream-json,        │◄──────►│  narrate  gpt-4.1-nano       │◄──────►│  audio @ 1–3x, barge-in    │
-│    interrupt, fork,    │ conn A │                              │ conn B │   (pitch-preserved)        │
-│    resume, PR list)    │  wss   │  TTS      ElevenLabs w/ word │  wss   │  word-sync highlighting    │
-│                        │        │           timings → OpenAI   │        │  click-to-replay           │
-│  caffeinate wrapper    │        │           fallback           │        │                            │
-│  (Mac stays awake)     │        │                              │        │  chat tabs; transcripts    │
-└────────────────────────┘        │  clips → R2 (replay w/o      │        │   in localStorage          │
-                                  │           re-synthesis)      │        │  access key (?key=…)       │
-                                  │                              │        └────────────────────────────┘
-                                  │  seq buffer + replay         │
-                                  │  access gate (token)         │
-                                  └──────────────────────────────┘
+   LAPTOP (yours)                             RELAY (Deno Deploy)                          CLIENT (browser/phone)
+┌────────────────────────────┐        ┌────────────────────────────────┐        ┌──────────────────────────────┐
+│  voizecode.mjs             │        │  STT      Deepgram streaming   │        │  Next.js web app             │
+│                            │        │           + endpointing        │        │                              │
+│  one claude/codex child    │        │                                │        │  mic 16k PCM + VAD           │
+│  per chat (stream-json,    │◄──────►│  narrate  gpt-4.1-nano         │◄──────►│  audio @ 1–3x, barge-in      │
+│  interrupt, fork, resume)  │ conn A │                                │ conn B │   (pitch-preserved)          │
+│                            │  wss   │  TTS      ElevenLabs w/ word   │  wss   │  word-sync highlighting      │
+│  caffeinate wrapper        │        │           timings → OpenAI     │        │  click-to-replay             │
+│  (Mac stays awake)         │        │           fallback             │        │                              │
+└────────────────────────────┘        │                                │        │  chat tabs; transcripts      │
+                                      │  clips → R2 (replay w/o        │        │   in localStorage            │
+                                      │           re-synthesis)        │        │  access key (?key=…)         │
+                                      │                                │        └──────────────────────────────┘
+                                      │  seq buffer + replay           │
+                                      │  access gate (token)           │
+                                      └────────────────────────────────┘
 ```
 
 Two independent WebSocket connections, each with heartbeat + watchdog + backoff reconnect.
