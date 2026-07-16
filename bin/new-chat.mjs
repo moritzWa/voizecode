@@ -2,15 +2,20 @@
 // Tells the running voizecode relay to open a chat in a given directory (used by `voize`).
 // Connects as a client, waits for an active agent session to route through, then asks for a
 // new chat in <dir>. Brief — the browser reconnects right after.
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import WebSocket from "../laptop/node_modules/ws/index.js";
 
 const cwd = process.argv[2] || process.cwd();
 const URL = process.env.VOIZE_RELAY_URL || "ws://localhost:8787";
+// Deployed relays gate on the access token (same one the agent presents); local dev ignores it.
+const token = process.env.VOIZE_TOKEN?.trim() ||
+  (() => { try { return readFileSync(join(homedir(), ".voizecode", "token"), "utf8").trim(); } catch { return ""; } })();
 const ws = new WebSocket(URL);
 let sent = false;
 
-ws.on("open", () => ws.send(JSON.stringify({ t: "hello", role: "client", since: 0 })));
+ws.on("open", () => ws.send(JSON.stringify({ t: "hello", role: "client", token, since: 0 })));
 ws.on("message", (r) => {
   let m; try { m = JSON.parse(r.toString()); } catch { return; }
   if (m.t === "sessions" && m.sessions?.[0] && !sent) {

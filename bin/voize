@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
-# `voize` — from any directory: open voizecode in the DESKTOP app with a chat for the current
-# directory. The desktop app starts the relay+client+agent itself if they aren't running, and a
-# single-instance lock means a second `voize` just focuses the existing window + adds a tab.
-# Set VOIZE_BROWSER=1 to open the web app in a browser instead (e.g. for phone/LAN testing).
+# `voize` — production mode: start the laptop agent against the DEPLOYED relay and print the
+# phone URL. Type `voize` in any repo → a chat opens for that directory, reachable from the
+# phone on cellular at the printed link. For the local dev stack (Electron/localhost) use
+# `voize-dev`. Overridable: VOIZE_RELAY_URL / VOIZE_APP_URL / VOIZE_TOKEN.
 VOIZE_DIR="${VOIZE_DIR:-$HOME/CODE/voizecode}"
 TARGET="$PWD"
 
-open_chat() { node "$VOIZE_DIR/bin/new-chat.mjs" "$TARGET" || true; }
-wait_relay() { for i in $(seq 1 60); do curl -s -o /dev/null http://localhost:8787 2>/dev/null && return 0; sleep 1; done; return 1; }
+RELAY="${VOIZE_RELAY_URL:-wss://voizecode-relay.moritzwa.deno.net}"
+APP="${VOIZE_APP_URL:-https://voizecode-web.moritzwa.deno.net}"
+TOKEN="${VOIZE_TOKEN:-$(cat "$HOME/.voizecode/token" 2>/dev/null)}"
 
-if [ -n "$VOIZE_BROWSER" ] || [ ! -x "$VOIZE_DIR/electron/node_modules/.bin/electron" ]; then
-  # Browser path (explicit, or desktop deps missing — run `cd electron && npm install` to enable it).
-  if ! curl -s -o /dev/null http://localhost:8787 2>/dev/null; then
-    echo "voize: starting services…"
-    ( cd "$VOIZE_DIR" && nohup npm run dev >/tmp/voizecode.log 2>&1 & )
-    wait_relay
-  fi
-  open_chat
-  open -a "Brave Browser" "http://localhost:3030" 2>/dev/null \
-    || open -a "Google Chrome" "http://localhost:3030" 2>/dev/null \
-    || open "http://localhost:3030" 2>/dev/null || true
-  echo "voize → http://localhost:3030  (chat: $(basename "$TARGET"))"
-  exit 0
+if pgrep -f "laptop/voizecode.mjs" >/dev/null 2>&1; then
+  # Agent already up — add a chat tab for this directory (routes through the deployed relay).
+  VOIZE_RELAY_URL="$RELAY" VOIZE_TOKEN="$TOKEN" node "$VOIZE_DIR/bin/new-chat.mjs" "$TARGET" || true
+else
+  # Fresh start: launch the agent IN this directory — its first chat opens here automatically.
+  # caffeinate -is keeps the Mac awake (idle + system sleep) for exactly as long as the agent
+  # runs, so the phone can keep talking to it unattended. Lid must stay open (clamshell sleep
+  # is not preventable without an external display).
+  echo "voize: starting agent → $RELAY  (keeping Mac awake while it runs)"
+  ( cd "$TARGET" && VOIZE_RELAY_URL="$RELAY" VOIZE_APP_URL="$APP" \
+      nohup caffeinate -is node "$VOIZE_DIR/laptop/voizecode.mjs" >/tmp/voizecode-agent.log 2>&1 & )
 fi
 
-# Desktop app: launch it (boots services if needed; re-launch just focuses the window).
-( cd "$VOIZE_DIR/electron" && nohup npm start >/tmp/voizecode-desktop.log 2>&1 & )
-wait_relay && open_chat
-echo "voize → desktop app  (chat: $(basename "$TARGET"))"
+echo "voize → $APP/?key=$TOKEN  (chat: $(basename "$TARGET"))"

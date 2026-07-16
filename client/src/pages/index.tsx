@@ -279,6 +279,15 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [forkPoint, setForkPoint] = useState<number | null>(null); // userIndex being edited (fork on send)
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const prevChatRef = useRef<string | null>(null);
+  // Auto-scroll the transcript: jump to the bottom when opening/switching a chat, and follow
+  // new lines only while already near the bottom (so scrolling up to read isn't fought).
+  useEffect(() => {
+    const el = transcriptRef.current; if (!el) return;
+    const switched = prevChatRef.current !== v.activeId; prevChatRef.current = v.activeId;
+    if (switched || el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
+  }, [v.activeId, v.lines]);
   const isCodexChat = v.model === "codex"; // forking is Claude-only
   const openBrowser = () => { v.requestSessions(); setBrowser(true); };
   const growInput = (el: HTMLTextAreaElement) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; };
@@ -363,7 +372,7 @@ export default function Home() {
           )}
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg rounded-tl-none border bg-card p-3">
+        <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg rounded-tl-none border bg-card p-3">
           {(() => { let userSeen = 0; return v.lines.map((l, i) => {
             if (l.kind === "agent") return <AgentMessage key={i} text={l.text} />;
             if (l.kind === "speech") {

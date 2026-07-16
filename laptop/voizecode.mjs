@@ -65,7 +65,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     // VOIZE_NO_ANNOUNCE lets the user's Stop hook (done-announce.sh) skip the "finished" sound —
     // we already speak the reply, so the chime is redundant for voizecode sessions.
     const child = spawn("claude", claudeArgs(model, resume), { stdio: ["pipe", "pipe", "inherit"], cwd, env: { ...process.env, VOIZE_NO_ANNOUNCE: "1" } });
-    claude = child; buf = ""; turnText = ""; claudeReady = false; // wait for init before sending queued turns
+    claude = child; buf = ""; turnText = ""; claudeReady = false; // ready flips on init (informational only — turns are written immediately, see flushTurns)
     console.log(`[${sessionId}] spawned claude (${model}${resume ? " resume " + resume.slice(0, 8) : ""}) in ${cwd}`);
     child.stdout.on("data", (d) => { if (child === claude) onStdout(d); });
     child.on("exit", (c) => { if (child === claude) { console.log(`[${sessionId}] claude exited`, c); send({ t: "exit", code: c ?? 0 }); } });
@@ -160,12 +160,13 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     }
   }
 
-  // A turn that arrives before claude has emitted its `init` is dropped by claude's stdin reader,
-  // so the first message to a freshly (re)spawned claude — new chat, resume, or fork — silently
-  // never gets a reply. Queue turns until ready, then flush in order.
+  // Write turns to claude's stdin as they arrive. Do NOT gate this on claude's `init` event:
+  // since Claude Code ~2.1 the CLI emits `init` only AFTER the first stdin message, so waiting
+  // for init before writing deadlocks the chat (the pre-2.1 behavior this queue guarded against
+  // — pre-init stdin being dropped — is gone; the pipe buffers writes to a starting process).
   const writeClaude = (text) =>
     claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
-  const flushTurns = () => { while (claudeReady && turnQueue.length) writeClaude(turnQueue.shift()); };
+  const flushTurns = () => { while (claude && turnQueue.length) writeClaude(turnQueue.shift()); };
   const pushTurn = isCodex ? codexTurn : (text) => { turnQueue.push(text); flushTurns(); };
   const interrupt = isCodex
     ? () => { try { codexProc?.kill("SIGINT"); } catch { /* gone */ } }

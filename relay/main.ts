@@ -483,8 +483,9 @@ function replay(since: number) {
 // ====================================================================
 // On Deno Deploy the platform assigns the port (Deno.serve with no port option); locally we bind PORT.
 const onDeploy = !!Deno.env.get("DENO_DEPLOYMENT_ID");
+const ISOLATE_ID = crypto.randomUUID().slice(0, 8); // distinguishes isolates in the diagnostic HTTP response
 Deno.serve(onDeploy ? {} : { port: PORT }, (req) => {
-  if (req.headers.get("upgrade") !== "websocket") return new Response("voizecode relay up");
+  if (req.headers.get("upgrade") !== "websocket") return new Response(`voizecode relay up (isolate=${ISOLATE_ID} bc=${typeof BroadcastChannel})`);
   // idleTimeout: Deno auto-pings and drops a socket with no traffic for this long —
   // backstop that reaps half-open sockets left by a network change. App-level
   // ping/pong (every 10s) keeps a live connection well under this window.

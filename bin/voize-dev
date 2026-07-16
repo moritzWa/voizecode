@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# `voize` — from any directory: open voizecode in the DESKTOP app with a chat for the current
+# directory. The desktop app starts the relay+client+agent itself if they aren't running, and a
+# single-instance lock means a second `voize` just focuses the existing window + adds a tab.
+# Set VOIZE_BROWSER=1 to open the web app in a browser instead (e.g. for phone/LAN testing).
+VOIZE_DIR="${VOIZE_DIR:-$HOME/CODE/voizecode}"
+TARGET="$PWD"
+
+open_chat() { node "$VOIZE_DIR/bin/new-chat.mjs" "$TARGET" || true; }
+wait_relay() { for i in $(seq 1 60); do curl -s -o /dev/null http://localhost:8787 2>/dev/null && return 0; sleep 1; done; return 1; }
+
+if [ -n "$VOIZE_BROWSER" ] || [ ! -x "$VOIZE_DIR/electron/node_modules/.bin/electron" ]; then
+  # Browser path (explicit, or desktop deps missing — run `cd electron && npm install` to enable it).
+  if ! curl -s -o /dev/null http://localhost:8787 2>/dev/null; then
+    echo "voize: starting services…"
+    ( cd "$VOIZE_DIR" && nohup npm run dev >/tmp/voizecode.log 2>&1 & )
+    wait_relay
+  fi
+  open_chat
+  open -a "Brave Browser" "http://localhost:3030" 2>/dev/null \
+    || open -a "Google Chrome" "http://localhost:3030" 2>/dev/null \
+    || open "http://localhost:3030" 2>/dev/null || true
+  echo "voize → http://localhost:3030  (chat: $(basename "$TARGET"))"
+  exit 0
+fi
+
+# Desktop app: launch it (boots services if needed; re-launch just focuses the window).
+( cd "$VOIZE_DIR/electron" && nohup npm start >/tmp/voizecode-desktop.log 2>&1 & )
+wait_relay && open_chat
+echo "voize → desktop app  (chat: $(basename "$TARGET"))"

@@ -1,0 +1,6 @@
+{
+  // Deno powers only the relay; the client stays on the regular Node/Next TS server.
+  // Requires the "Deno" VS Code extension (denoland.vscode-deno) — fixes "Cannot find name 'Deno'".
+  "deno.enable": true,
+  "deno.enablePaths": ["relay"]
+}
