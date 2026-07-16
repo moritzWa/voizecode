@@ -26,19 +26,23 @@ it, so I'll add one first."* That's pair-programming, not terminal-watching.
 ## Architecture (3 tiers, relay in the middle)
 
 ```
-   LAPTOP (yours)                 RELAY (Deno Deploy)                 CLIENT (browser/phone)
-┌─────────────────────┐      ┌───────────────────────────┐      ┌─────────────────────────┐
-│ voizecode.mjs       │      │ STT   Deepgram streaming  │      │ Next.js web app         │
-│  one claude/codex   │      │       + endpointing       │      │  mic 16k PCM + VAD      │
-│  child per chat     │◄────►│ narrate  gpt-4.1-nano     │◄────►│  audio @1–3x (pitch-    │
-│  (stream-json,      │conn A│ TTS   ElevenLabs w/ word  │conn B│   preserved), barge-in  │
-│   interrupt, fork,  │ wss  │       timings → OpenAI    │ wss  │  word-sync highlighting │
-│   resume, PR list)  │      │       fallback            │      │  click-to-replay        │
-│ caffeinate wrapper  │      │ clips → R2  (replay w/o   │      │  chat tabs, transcripts │
-│ (Mac stays awake)   │      │       re-synthesis)       │      │   in localStorage       │
-└─────────────────────┘      │ seq buffer + replay       │      │  access key (?key=…)    │
-                             │ access gate (token)       │      └─────────────────────────┘
-                             └───────────────────────────┘
+   LAPTOP (yours)                       RELAY (Deno Deploy)                    CLIENT (browser/phone)
+┌────────────────────────┐        ┌──────────────────────────────┐        ┌────────────────────────────┐
+│  voizecode.mjs         │        │  STT      Deepgram streaming │        │  Next.js web app           │
+│   one claude/codex     │        │           + endpointing      │        │                            │
+│   child per chat       │        │                              │        │  mic 16k PCM + VAD         │
+│   (stream-json,        │◄──────►│  narrate  gpt-4.1-nano       │◄──────►│  audio @ 1–3x, barge-in    │
+│    interrupt, fork,    │ conn A │                              │ conn B │   (pitch-preserved)        │
+│    resume, PR list)    │  wss   │  TTS      ElevenLabs w/ word │  wss   │  word-sync highlighting    │
+│                        │        │           timings → OpenAI   │        │  click-to-replay           │
+│  caffeinate wrapper    │        │           fallback           │        │                            │
+│  (Mac stays awake)     │        │                              │        │  chat tabs; transcripts    │
+└────────────────────────┘        │  clips → R2 (replay w/o      │        │   in localStorage          │
+                                  │           re-synthesis)      │        │  access key (?key=…)       │
+                                  │                              │        └────────────────────────────┘
+                                  │  seq buffer + replay         │
+                                  │  access gate (token)         │
+                                  └──────────────────────────────┘
 ```
 
 Two independent WebSocket connections, each with heartbeat + watchdog + backoff reconnect.
