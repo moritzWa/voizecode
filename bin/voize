@@ -6,8 +6,8 @@
 VOIZE_DIR="${VOIZE_DIR:-$HOME/CODE/voizecode}"
 TARGET="$PWD"
 
-RELAY="${VOIZE_RELAY_URL:-wss://voizecode-relay.moritzwa.deno.net}"
-APP="${VOIZE_APP_URL:-https://voizecode-web.moritzwa.deno.net}"
+RELAY="${VOIZE_RELAY_URL:-wss://voizecode-relay.fly.dev}"
+APP="${VOIZE_APP_URL:-https://voizecode-web.fly.dev}"
 TOKEN="${VOIZE_TOKEN:-$(cat "$HOME/.voizecode/token" 2>/dev/null)}"
 
 if pgrep -f "laptop/voizecode.mjs" >/dev/null 2>&1; then

@@ -1,0 +1,15 @@
+# Fly.io config — ONE always-on machine. The relay keeps sessions/sockets in memory,
+# so it must never scale horizontally or auto-stop (that's why it left Deno Deploy).
+app = "voizecode-relay"
+primary_region = "sjc"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -26,7 +26,7 @@ it, so I'll add one first."* That's pair-programming, not terminal-watching.
 ## Architecture (3 tiers, relay in the middle)
 
 ```
-   LAPTOP (yours)                             RELAY (Deno Deploy)                          CLIENT (browser/phone)
+   LAPTOP (yours)                             RELAY (Fly.io)                               CLIENT (browser/phone)
 ┌────────────────────────────┐        ┌────────────────────────────────┐        ┌──────────────────────────────┐
 │  voizecode.mjs             │        │  STT      Deepgram streaming   │        │  Next.js web app             │
 │                            │        │           + endpointing        │        │                              │
@@ -113,20 +113,24 @@ First time: `cd electron && npm install`. If Electron's binary extracts incomple
 
 ## Deploy
 
-Both cloud tiers live on Deno Deploy (`relay/deno.json` / `client/deno.jsonc` name the apps):
+Both cloud tiers run on Fly.io — ONE always-on machine each (`relay/fly.toml`, `client/fly.toml`):
 
 ```bash
-cd relay  && deno deploy --prod    # wss://voizecode-relay.<org>.deno.net
-cd client && deno deploy --prod    # https://voizecode-web.<org>.deno.net  (builds Next in the cloud)
+cd relay  && flyctl deploy --ha=false    # wss://voizecode-relay.fly.dev
+cd client && flyctl deploy --ha=false    # https://voizecode-web.fly.dev
 ```
 
-Relay env (set with `deno deploy env add`): `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`,
-`ELEVENLABS_API_KEY` (optional — presence selects ElevenLabs TTS), `CLIP_STORE=r2` + `R2_*` creds,
-`VOIZE_TOKEN` (pins the access code). The client bakes `NEXT_PUBLIC_RELAY_WS` in at **build time**,
-so it must be set in the web app's env before deploying.
+Single-instance hosting is a hard requirement, not a preference: the relay keeps sessions and
+live sockets in memory. It originally ran on Deno Deploy, which transparently load-balances
+across isolates that share nothing — the agent and the phone would land on different isolates
+and never see each other (and the new platform's BroadcastChannel is a non-functional stub, so
+the bridge in `main.ts` couldn't save it there; it stays because it self-activates on any host
+where BC works).
 
-The relay's plain-HTTP response (`curl` the relay URL) reports its isolate id — useful because of
-the known multi-isolate caveat below.
+Relay secrets (set with `flyctl secrets set`): `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`,
+`ELEVENLABS_API_KEY` (optional — presence selects ElevenLabs TTS), `CLIP_STORE=r2` + `R2_*` creds,
+`VOIZE_TOKEN` (pins the access code). The client bakes `NEXT_PUBLIC_RELAY_WS` in at **build
+time** (Dockerfile ARG), so changing the relay URL means rebuilding the client.
 
 ## Tests
 
@@ -142,11 +146,8 @@ node test/durability.mjs  # heartbeat, replay-on-reconnect, full relay-restart s
 - Access gate: off for local dev; auto-on when deployed (Deno Deploy) or when `VOIZE_TOKEN` is set.
   The laptop agent generates a code (`~/.voizecode/token`) and prints a `?key=…` URL; the relay adopts it
   and the web app stores it in `localStorage`. `--dangerously-skip-permissions` makes this a must before exposing.
-- **Known issue — Deno Deploy multi-isolate:** relay state (sessions, client slot) is in-memory and
-  per-isolate; under churn (redeploys, reconnects) the agent and phone can land on *different*
-  isolates and stop seeing each other ("no projects found", dropped turns). Recovery: restart the
-  agent, reload the phone tab. Planned fix: BroadcastChannel bridge (verified available on the new
-  Deno Deploy despite docs saying Classic-only).
+- The laptop agent runs as a launchd LaunchAgent (`com.voizecode.agent`): starts at login,
+  restarts on crash, wrapped in `caffeinate` so the Mac stays awake while it runs.
 - Lock-screen audio on iOS is buildable in a plain Safari tab (research verified: persistent
   `<audio>` element + silent-loop gap bridging + MediaSession; mic capture survives lock in Safari,
   no WebRTC needed — AudioContext needs an `interrupted`-state resume loop). Not yet implemented.
