@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, X, FolderOpen, History, ClipboardCopy, Check, Settings, GitPullRequest, Search, Play, Pause, AudioLines, Pencil } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, X, FolderOpen, History, Settings, GitPullRequest, Search, Play, Pause, AudioLines, Pencil } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
@@ -291,7 +291,6 @@ export default function Home() {
   const [browser, setBrowser] = useState(false);
   const [settings, setSettings] = useState(false);
   const [prModal, setPrModal] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [forkPoint, setForkPoint] = useState<number | null>(null); // userIndex being edited (fork on send)
   const taRef = useRef<HTMLTextAreaElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -318,38 +317,31 @@ export default function Home() {
 
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col gap-3 p-4">
-      <header className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-lg font-semibold">voizecode</h1>
-          <Button size="sm" onClick={openBrowser} title="Open or start a chat">
-            <Plus size={13} /> New chat
+      <header className="flex items-center gap-1.5">
+        <span className="h-2 w-2 shrink-0 rounded-full" title={v.connected ? "connected" : "connecting…"}
+          style={{ background: v.connected ? "#16a34a" : "#dc2626" }} />
+        <span className="text-sm font-semibold">voizecode</span>
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={openBrowser} title="Open or start a chat" aria-label="New chat">
+          <Plus size={15} />
+        </Button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <Select value={v.model} onValueChange={v.setModel}>
+            <SelectTrigger className="h-7 w-[84px] text-xs" title="Claude model"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="haiku">haiku</SelectItem>
+              <SelectItem value="sonnet">sonnet</SelectItem>
+              <SelectItem value="opus">opus</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={v.voice} onValueChange={v.setVoice}>
+            <SelectTrigger className="h-7 w-[110px] text-xs" title="Narrator voice"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings" onClick={() => setSettings(true)} aria-label="Settings">
+            <Settings size={14} />
           </Button>
-          <div className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={cn("whitespace-nowrap", v.connected ? "text-green-600 dark:text-green-400" : "text-destructive")}>
-              {v.connected ? "connected" : "connecting…"}
-            </span>
-            <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy debug info (project, chat, claude session id)"
-              onClick={async () => { await v.copyDebug(); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>
-              {copied ? <Check size={14} className="text-green-600" /> : <ClipboardCopy size={14} />}
-            </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings" onClick={() => setSettings(true)}>
-              <Settings size={14} />
-            </Button>
-            <Select value={v.model} onValueChange={v.setModel}>
-              <SelectTrigger className="h-7 w-[92px] text-xs" title="Claude model"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="haiku">haiku</SelectItem>
-                <SelectItem value="sonnet">sonnet</SelectItem>
-                <SelectItem value="opus">opus</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={v.voice} onValueChange={v.setVoice}>
-              <SelectTrigger className="h-7 w-[140px] text-xs" title="Narrator voice"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
         </div>
       </header>
 

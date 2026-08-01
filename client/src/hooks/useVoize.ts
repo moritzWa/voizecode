@@ -17,6 +17,9 @@ function resolveToken(): string {
 }
 const MIC_SR = 16000;
 const LS_KEY = "voize:convos:v1";
+const TABS_KEY = "voize:tabs:v1";     // open tabs to restore: {sid: TabInfo}
+const ACTIVE_KEY = "voize:activeTab"; // which tab was focused
+type TabInfo = { claudeSessionId: string; cwd: string; label: string };
 // Max wait between reconnect attempts (it retries FOREVER; this only caps the interval).
 // The `online` event triggers an immediate reconnect, so a longer outage still recovers fast.
 const RECONNECT_CAP_MS = Number(process.env.NEXT_PUBLIC_RECONNECT_CAP_MS) || 15000;
@@ -88,6 +91,11 @@ export function useVoize() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
   const [prs, setPrs] = useState<{ number: number; title: string; url: string; createdAt: string; isDraft: boolean; author?: string }[]>([]);
   const [metas, setMetas] = useState<Record<string, { claudeSessionId: string; cwd: string }>>({}); // debug info per chat
+  // Open-tab memory: {sid: {claudeSessionId, cwd, label}} in localStorage. A tab whose session is
+  // missing from a `sessions` broadcast (page refresh after an agent restart killed its chat) is
+  // auto-resumed via new_session+resumeId, so open tabs survive both refreshes and agent restarts.
+  const sessionsRef = useRef<SessionInfo[]>([]);
+  const restoredTabs = useRef<Set<string>>(new Set()); // sids we already fired a resume for
   const [voice, setVoiceState] = useState(DEFAULT_VOICE);
   const voiceRef = useRef(voice);
   const [mics, setMics] = useState<{ id: string; label: string }[]>([]);
@@ -151,6 +159,7 @@ export function useVoize() {
     return () => navigator.mediaDevices?.removeEventListener?.("devicechange", refreshMics);
   }, [refreshMics]);
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(convos)); } catch { /* quota */ } }, [convos]);
+  useEffect(() => { if (activeId) try { localStorage.setItem(ACTIVE_KEY, activeId); } catch { /* quota */ } }, [activeId]);
   useEffect(() => { (window as unknown as { __voizePending?: unknown }).__voizePending = pending.current; }, []);
 
   const send = (m: unknown) => ws.current?.readyState === WebSocket.OPEN && ws.current.send(JSON.stringify(m));
@@ -240,7 +249,25 @@ export function useVoize() {
           const fresh = incoming.filter((id) => !knownIds.current.has(id));
           knownIds.current = new Set(incoming);
           setSessions(m.sessions);
-          setActiveId((cur) => cur || incoming[0] || "");
+          sessionsRef.current = m.sessions;
+          setActiveId((cur) => {
+            if (cur) return cur;
+            const saved = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_KEY) : null;
+            return saved && incoming.includes(saved) ? saved : (incoming[0] || "");
+          });
+          // Resume remembered tabs whose chat no longer exists (agent restart dropped it).
+          try {
+            const tabs: Record<string, TabInfo> = JSON.parse(localStorage.getItem(TABS_KEY) || "{}");
+            let changed = false;
+            for (const [tsid, t] of Object.entries(tabs)) {
+              if (incoming.includes(tsid) || restoredTabs.current.has(tsid)) continue;
+              if (!incoming.length || !t.claudeSessionId) continue; // need a live route + a resume handle
+              restoredTabs.current.add(tsid);
+              send({ t: "new_session", sessionId: incoming[0], cwd: t.cwd, resumeId: t.claudeSessionId, label: t.label });
+              delete tabs[tsid]; changed = true; // re-remembered under its new sid once its meta arrives
+            }
+            if (changed) localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+          } catch { /* quota/parse */ }
           if (wantNew.current && fresh.length) { // focus the chat we just created
             wantNew.current = false;
             const id = fresh[fresh.length - 1];
@@ -258,6 +285,15 @@ export function useVoize() {
         case "sessions_list": setSavedSessions(m.sessions || []); setProjects(m.projects || []); break;
         case "meta":
           setMetas((p) => ({ ...p, [sid]: { claudeSessionId: m.claudeSessionId, cwd: m.cwd } }));
+          // Remember this tab for restore-after-refresh (claude chats only — codex has no meta).
+          if (m.claudeSessionId) {
+            try {
+              const tabs: Record<string, TabInfo> = JSON.parse(localStorage.getItem(TABS_KEY) || "{}");
+              const info = sessionsRef.current.find((x) => x.sessionId === sid);
+              tabs[sid] = { claudeSessionId: m.claudeSessionId, cwd: m.cwd, label: info?.label || sid.split("#")[0] };
+              localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+            } catch { /* quota */ }
+          }
           // a fork's resumed claude just became ready -> deliver the edited turn via the relay
           if (forkSend.current && forkSend.current.sid === sid) { const t = forkSend.current.text; forkSend.current = null; send({ t: "text", sessionId: sid, text: t }); }
           break;
@@ -539,6 +575,12 @@ export function useVoize() {
   // Close a chat: kill its claude subprocess + drop the tab. Switches away if it was active.
   const closeSession = useCallback((sid: string) => {
     send({ t: "close_session", sessionId: sid });
+    // Deliberately closed -> forget it (otherwise the restore logic would resurrect it).
+    try {
+      const tabs: Record<string, TabInfo> = JSON.parse(localStorage.getItem(TABS_KEY) || "{}");
+      delete tabs[sid];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+    } catch { /* quota */ }
     knownIds.current.delete(sid);
     pending.current[sid] = [];
     setConvos((p) => { const n = { ...p }; delete n[sid]; return n; });
