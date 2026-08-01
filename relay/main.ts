@@ -76,16 +76,80 @@ function getSession(id: string): Session {
 let seq = 0;
 const ring: { seq: number; msg: unknown }[] = [];
 const nextSeq = () => ++seq;
+
+// ---- cross-isolate bridge ----
+// Deno Deploy runs several isolates that do NOT share memory, and the agent's and the phone's
+// WebSockets can land on different ones — each seeing "no sessions" from the other. BroadcastChannel
+// spans isolates: each isolate announces its live agent sessions, and any message whose target
+// socket isn't local is re-posted for whichever isolate holds it. The replay `ring` stays
+// local-only — a client that hops isolates loses replay history but keeps all live traffic.
+const ISOLATE_ID = crypto.randomUUID().slice(0, 8);
+type SessionInfo = { sessionId: string; label: string; model: string };
+const remoteSessions = new Map<string, { list: SessionInfo[]; at: number }>();
+const REMOTE_TTL_MS = 30000; // an isolate that hasn't re-announced in this long is considered gone
+const bc = typeof BroadcastChannel !== "undefined" && Deno.env.get("DENO_DEPLOYMENT_ID")
+  ? new BroadcastChannel("voize-bridge") : null;
+const bcPings: string[] = []; // /bc-ping diagnostics: pings received from OTHER isolates
+const localSessionList = (): SessionInfo[] =>
+  [...sessions.values()].filter((s) => s.agent).map((s) => ({ sessionId: s.id, label: s.label, model: s.model }));
+const announce = () => bc?.postMessage({ k: "ann", iso: ISOLATE_ID, list: localSessionList() });
+function remoteHasSession(sid: string): boolean {
+  const now = Date.now();
+  for (const r of remoteSessions.values()) if (now - r.at < REMOTE_TTL_MS && r.list.some((x) => x.sessionId === sid)) return true;
+  return false;
+}
+function mergedSessionList(): SessionInfo[] {
+  const list = localSessionList();
+  const seen = new Set(list.map((s) => s.sessionId));
+  const now = Date.now();
+  for (const r of remoteSessions.values()) {
+    if (now - r.at >= REMOTE_TTL_MS) continue;
+    for (const s of r.list) if (!seen.has(s.sessionId)) { seen.add(s.sessionId); list.push(s); }
+  }
+  return list;
+}
+const sendSessionsToLocalClient = () =>
+  client?.readyState === WebSocket.OPEN && client.send(JSON.stringify({ t: "sessions", sessions: mergedSessionList() }));
+if (bc) {
+  bc.onmessage = (e: MessageEvent) => {
+    const m = e.data as Record<string, unknown>;
+    switch (m.k) {
+      case "who": announce(); break;
+      case "ping": bcPings.push(`${m.iso}→${ISOLATE_ID}`); if (bcPings.length > 5) bcPings.shift(); break;
+      case "ann": // another isolate's live sessions changed -> refresh our client's picker
+        remoteSessions.set(m.iso as string, { list: m.list as SessionInfo[], at: Date.now() });
+        sendSessionsToLocalClient();
+        break;
+      case "c2a": { // client input for an agent held by this isolate
+        const s = sessions.get(m.sid as string);
+        if (s?.agent?.readyState === WebSocket.OPEN) s.agent.send(JSON.stringify(m.m));
+        break;
+      }
+      case "a2c": { // agent output for a client held by this isolate
+        if (client?.readyState !== WebSocket.OPEN) break;
+        const full = m.full as Record<string, unknown>;
+        client.send(JSON.stringify(full));
+        break;
+      }
+    }
+  };
+  bc.postMessage({ k: "who" }); // learn the other isolates' sessions on boot
+  setInterval(announce, 10000); // heartbeat so REMOTE_TTL_MS can expire dead isolates
+}
+
 function toClient(sessionId: string, msg: Record<string, unknown>) {
   const full = { ...msg, sessionId };
   if ("seq" in full) { ring.push({ seq: full.seq as number, msg: full }); if (ring.length > 800) ring.shift(); }
   if (client?.readyState === WebSocket.OPEN) client.send(JSON.stringify(full));
+  else bc?.postMessage({ k: "a2c", full });
 }
-const toAgent = (s: Session, msg: Record<string, unknown>) =>
-  s.agent?.readyState === WebSocket.OPEN && s.agent.send(JSON.stringify(msg));
+function toAgent(s: Session, msg: Record<string, unknown>) {
+  if (s.agent?.readyState === WebSocket.OPEN) return s.agent.send(JSON.stringify(msg));
+  bc?.postMessage({ k: "c2a", sid: s.id, m: msg });
+}
 function broadcastSessions() {
-  const list = [...sessions.values()].filter((s) => s.agent).map((s) => ({ sessionId: s.id, label: s.label, model: s.model }));
-  if (client?.readyState === WebSocket.OPEN) client.send(JSON.stringify({ t: "sessions", sessions: list }));
+  announce(); // our list changed -> keep other isolates' pickers fresh too
+  sendSessionsToLocalClient();
 }
 
 // ====================================================================
@@ -199,7 +263,7 @@ function deliverUtterance(s: Session) {
   }
 }
 function deliverUserTurn(s: Session, text: string) {
-  const agentUp = s.agent?.readyState === WebSocket.OPEN;
+  const agentUp = s.agent?.readyState === WebSocket.OPEN || remoteHasSession(s.id);
   console.log(`[relay:${s.id}] user: ${text}${agentUp ? "" : "  ⚠ NO AGENT CONNECTED — turn dropped, will appear stuck on 'working'"}`);
   s.lastToolSpeakAt = 0; // let the first meaningful tool call this turn speak
   // A new turn supersedes whatever was in flight: interrupt claude + stop its audio first.
@@ -236,7 +300,15 @@ async function speak(s: Session, text: string) {
   let any = false;
   const parts: Uint8Array[] = [];          // collected audio bytes, persisted on completion
   let clipWords: { text: string; start: number }[] = []; // word timings (ElevenLabs only), persisted alongside
-  const emit = (bytes: Uint8Array) => { if (bytes.length) { any = true; parts.push(bytes); toClient(s.id, { t: "audio_chunk", clip, b64: b64(bytes), seq: nextSeq(), format: fmt }); } };
+  // Emit in bounded slices: a whole-blob TTS response as one message would blow past the
+  // cross-isolate bridge's payload cap (and MediaSource appends smaller chunks sooner anyway).
+  const emit = (bytes: Uint8Array) => {
+    for (let o = 0; o < bytes.length; o += 24576) {
+      const part = bytes.subarray(o, Math.min(o + 24576, bytes.length));
+      any = true; parts.push(part);
+      toClient(s.id, { t: "audio_chunk", clip, b64: b64(part), seq: nextSeq(), format: fmt });
+    }
+  };
 
   const streamOpenAI = async () => {
     const r = await fetch("https://api.openai.com/v1/audio/speech", {
@@ -266,7 +338,7 @@ async function speak(s: Session, text: string) {
     });
     if (!r.ok) throw new Error(`elevenlabs tts ${r.status}`);
     const j = await r.json();
-    if (j.audio_base64) { any = true; parts.push(b64ToBytes(j.audio_base64 as string)); toClient(s.id, { t: "audio_chunk", clip, b64: j.audio_base64 as string, seq: nextSeq(), format: fmt }); }
+    if (j.audio_base64) emit(b64ToBytes(j.audio_base64 as string));
     clipWords = j.alignment ? wordsFromAlignment(j.alignment) : [];
     if (clipWords.length) toClient(s.id, { t: "words", clip, words: clipWords, seq: nextSeq() });
   };
@@ -443,7 +515,10 @@ function handleClient(m: Record<string, unknown>) {
   if (m.t === "set_narration") { narration = m.mode as typeof narration; return; }
   if (m.t === "set_voice") { ttsVoice = String(m.voice); console.log("[relay] voice ->", ttsVoice); return; }
   if (m.t === "get_clip") { void serveClip(String(m.key)); return; }
-  const s = m.sessionId ? sessions.get(m.sessionId as string) : undefined;
+  // A session the local isolate doesn't hold may still live behind the bridge — create a local
+  // shell for it (agent: null) so STT/turn delivery work here and toAgent() bridges the input.
+  const sid = m.sessionId as string | undefined;
+  const s = sid ? (sessions.get(sid) ?? (remoteHasSession(sid) ? getSession(sid) : undefined)) : undefined;
   if (!s) return;
   switch (m.t) {
     case "audio": feedAudio(s, m.pcm as string); break;
@@ -483,9 +558,11 @@ function replay(since: number) {
 // ====================================================================
 // On Deno Deploy the platform assigns the port (Deno.serve with no port option); locally we bind PORT.
 const onDeploy = !!Deno.env.get("DENO_DEPLOYMENT_ID");
-const ISOLATE_ID = crypto.randomUUID().slice(0, 8); // distinguishes isolates in the diagnostic HTTP response
 Deno.serve(onDeploy ? {} : { port: PORT }, (req) => {
-  if (req.headers.get("upgrade") !== "websocket") return new Response(`voizecode relay up (isolate=${ISOLATE_ID} bc=${typeof BroadcastChannel})`);
+  if (req.headers.get("upgrade") !== "websocket") {
+    if (new URL(req.url).pathname === "/bc-ping") { bc?.postMessage({ k: "ping", iso: ISOLATE_ID }); return new Response(`pinged from ${ISOLATE_ID}`); }
+    return new Response(`voizecode relay up (isolate=${ISOLATE_ID} bc=${!!bc} received=[${bcPings.join(" ")}] remotes=${remoteSessions.size})`);
+  }
   // idleTimeout: Deno auto-pings and drops a socket with no traffic for this long —
   // backstop that reaps half-open sockets left by a network change. App-level
   // ping/pong (every 10s) keeps a live connection well under this window.
