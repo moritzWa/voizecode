@@ -247,7 +247,16 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
         if (block.type === "tool_use") send({ t: "tool_use", name: block.name, summary: toolSummary(block), speak: toolSpeakable(block) });
       }
     } else if (m.type === "result") {
-      send({ t: "turn_end", fullText: turnText.trim() });
+      let text = turnText.trim();
+      // An error result has no streamed text -> the turn would end in dead silence. Surface it,
+      // with a specific nudge for the common case (expired Claude Code login on the laptop).
+      if ((m.is_error || m.subtype !== "success") && !text) {
+        const raw = String(m.result || m.error || "unknown error");
+        text = /login|log in|auth|credential|expired|oauth|api key/i.test(raw)
+          ? "Claude Code login expired on the laptop — run claude /login there, then ask again."
+          : `claude error: ${raw.slice(0, 200)}`;
+      }
+      send({ t: "turn_end", fullText: text });
       turnText = "";
     }
   }

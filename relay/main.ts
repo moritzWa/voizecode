@@ -515,7 +515,11 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
     case "history": toClient(s.id, { t: "history", messages: m.messages }); break;
     case "meta": toClient(s.id, { t: "meta", claudeSessionId: m.claudeSessionId, cwd: m.cwd }); break;
     case "prs": toClient(s.id, { t: "prs", prs: m.prs }); break;
-    case "exit": console.log(`[relay:${s.id}] agent exited`, m.code); break;
+    case "exit":
+      console.log(`[relay:${s.id}] agent exited`, m.code);
+      // A dying claude (bad auth, crash) otherwise leaves the chat silently stuck on "working".
+      if (m.code) toClient(s.id, { t: "status", text: `claude exited (code ${m.code}) — check the laptop; if your login expired, run claude /login`, seq: nextSeq() });
+      break;
   }
 }
 
