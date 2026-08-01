@@ -76,8 +76,8 @@ export function useVoize() {
   const [micError, setMicError] = useState("");
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);
-  const [thinkingSound, setThinkingSoundState] = useState(true); // ambient "thinking" shimmer
-  const thinkingSoundRef = useRef(true);
+  const [thinkingSound, setThinkingSoundState] = useState(false); // ambient "thinking" shimmer (opt-in)
+  const thinkingSoundRef = useRef(false);
   const [paused, setPaused] = useState(false);                          // user paused playback (pause/play button)
   const [rambling, setRambling] = useState(false);                      // ramble/dictation: accumulate speech, send on stop
   const ramblingRef = useRef(false);
@@ -134,8 +134,8 @@ export function useVoize() {
     setVoiceState(v); voiceRef.current = v;
     const savedPref = (typeof window !== "undefined" && localStorage.getItem(MICPREF_KEY)) || "";
     setMicPrefState(savedPref); micPrefRef.current = savedPref;
-    const ts = typeof window === "undefined" ? "1" : (localStorage.getItem("voize:thinkingSound") ?? "1");
-    setThinkingSoundState(ts !== "0"); thinkingSoundRef.current = ts !== "0";
+    const ts = typeof window === "undefined" ? "0" : (localStorage.getItem("voize:thinkingSound") ?? "0");
+    setThinkingSoundState(ts === "1"); thinkingSoundRef.current = ts === "1";
   }, []);
 
   // List audio-input devices (labels only populate after mic permission is granted once).

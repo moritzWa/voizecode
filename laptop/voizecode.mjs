@@ -98,7 +98,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     const root = join(homedir(), ".claude", "projects");
     let file = null;
     try { for (const d of readdirSync(root)) { const f = join(root, d, id + ".jsonl"); try { statSync(f); file = f; break; } catch { /* not here */ } } } catch { return; }
-    if (!file) { console.log(`[${sessionId}] fork: no transcript for ${id}`); return; }
+    if (!file) { console.log(`[${sessionId}] fork: no transcript for ${id}`); send({ t: "status", text: "edit failed — no transcript to fork" }); return; }
     let lines;
     try { lines = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()); } catch { return; }
     let count = 0, cut = -1; // line index of the userIndex-th real user turn
@@ -111,7 +111,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
       if (count === userIndex) { cut = i; break; }
       count++;
     }
-    if (cut <= 0) { console.log(`[${sessionId}] fork: couldn't locate user turn ${userIndex}`); return; }
+    if (cut <= 0) { console.log(`[${sessionId}] fork: couldn't locate user turn ${userIndex}`); send({ t: "status", text: "edit failed — can't fork at this message (first turns can't be edited in place)" }); return; }
     const newId = randomUUID();
     const dest = join(file.slice(0, file.lastIndexOf("/")), newId + ".jsonl");
     try { writeFileSync(dest, lines.slice(0, cut).join("\n") + "\n"); }
@@ -124,9 +124,14 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     else { try { unlinkSync(file); } catch { /* gone */ } }
     console.log(`[${sessionId}] forked in place at user turn ${userIndex}: ${id.slice(0, 8)} -> ${newId.slice(0, 8)} (${cut} lines kept, old thread will be deleted)`);
     // Repopulate the same tab with the truncated transcript. The client sends the edited turn via
-    // the relay once our resumed claude is ready (its `meta`), so it arrives through the proven
-    // user_message path and gets echoed as a normal user bubble.
+    // the relay once it sees our `meta`, so it arrives through the proven user_message path and
+    // gets echoed as a normal user bubble.
     send({ t: "history", sessionId, messages: buildHistory(newId) });
+    // Announce readiness NOW with the known id: claude >=2.1 emits `init` only after its first
+    // stdin message, so waiting for init to send meta would deadlock the client's queued edited
+    // turn (it waits for meta; claude waits for input). The real init re-sends the same meta.
+    liveSessionId = newId;
+    send({ t: "meta", claudeSessionId: newId, cwd });
   }
 
   // --- Codex engine: one `codex exec` per turn, resuming by thread id (prompt via stdin) ---

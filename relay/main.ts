@@ -413,7 +413,12 @@ const NARRATE_SYSTEM =
   "essentially as-is (just spoken-natural). " +
   "Light markdown is welcome for skimmability: **bold** key terms and the main takeaway, `backticks` for identifiers — " +
   "mirror any emphasis the original already had. " +
-  "No greetings, no meta-commentary, no filler. Output only the spoken adaptation.";
+  "NEVER add information that is not in the original reply — no background, no elaboration, no examples of your own. " +
+  "A short reply (even a single word) is spoken exactly as-is; expanding it is as wrong as dropping content. " +
+  "Output ONLY the adapted content, starting directly with its first substantive sentence. NEVER refer to this task " +
+  "or yourself as an adapter — no openers like 'Alright, here's the story', 'here's the spoken version', 'I'll tell it " +
+  "as I'd say it aloud', no greetings, no meta-commentary, no filler. You are not telling anyone ABOUT the reply; you " +
+  "ARE the reply.";
 
 // Split a buffer into complete sentences. Terminators inside a `code` span or a **bold** span are
 // ignored (so `email ?? ""` never breaks a clip, and a **bold heading.** isn't split mid-markup,
@@ -442,7 +447,11 @@ function takeSentences(b: string): { done: string[]; rest: string } {
 async function narrateFinal(s: Session, fullText: string) {
   toClient(s.id, { t: "thinking", on: false });
   if (!fullText) return;
-  if (!OPENAI_KEY) { await speak(s, fullText); return; }
+  // Short prose needs no adaptation — and the nano narrator can't resist embellishing it
+  // (a one-word reply came back as a multi-sentence lecture). Bypass it entirely unless the
+  // reply is long or contains structure (code, tables, headings) that genuinely needs work.
+  const needsAdaptation = fullText.length > 240 || /```|\n\|.*\||^#{1,3} |\n- |\n\d+\. /m.test(fullText);
+  if (!OPENAI_KEY || !needsAdaptation) { await speak(s, fullText); return; }
   try {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, Loader2, X, FolderOpen, History, ClipboardCopy, Check, Settings, GitPullRequest, Search, Play, Pause, AudioLines, Pencil } from "lucide-react";
+import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, X, FolderOpen, History, ClipboardCopy, Check, Settings, GitPullRequest, Search, Play, Pause, AudioLines, Pencil } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
@@ -13,11 +13,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const MIC_AUTO = "__auto__";
 
-// Render an agent reply as markdown. Fenced code blocks scroll horizontally (no wrap, so
-// ASCII diagrams stay aligned on a narrow phone); prose, lists, headings render readably.
+// Render an agent reply as markdown, collapsed by default — the narrator lines below it are
+// the primary reading surface; the raw reply is there for detail on demand. Fenced code blocks
+// scroll horizontally (no wrap, so ASCII diagrams stay aligned on a narrow phone).
 function AgentMessage({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="px-1 py-0.5 text-xs leading-relaxed text-foreground break-words
+    <div className="rounded border border-transparent">
+      <button onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1 px-1 py-0.5 text-left text-[11px] text-muted-foreground/70 hover:text-muted-foreground"
+        aria-expanded={open}>
+        <span className={cn("inline-block transition-transform", open && "rotate-90")}>▸</span>
+        {open ? "full reply" : `full reply · ${text.length > 60 ? text.slice(0, 60).replace(/\s+\S*$/, "") + "…" : text}`}
+      </button>
+      {open && <AgentMessageBody text={text} />}
+    </div>
+  );
+}
+function AgentMessageBody({ text }: { text: string }) {
+  return (
+    <div className="px-1 py-0.5 text-xs leading-relaxed text-muted-foreground break-words
       [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0
       [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5
       [&_h1]:mb-1 [&_h1]:mt-2 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mb-1 [&_h2]:mt-2 [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:font-semibold
@@ -313,7 +328,6 @@ export default function Home() {
             <span className={cn("whitespace-nowrap", v.connected ? "text-green-600 dark:text-green-400" : "text-destructive")}>
               {v.connected ? "connected" : "connecting…"}
             </span>
-            {v.thinking && <Loader2 size={14} className="animate-spin text-blue-600 dark:text-blue-400" />}
             <Button variant="ghost" size="icon" className="h-7 w-7" title="Copy debug info (project, chat, claude session id)"
               onClick={async () => { await v.copyDebug(); setCopied(true); setTimeout(() => setCopied(false), 1200); }}>
               {copied ? <Check size={14} className="text-green-600" /> : <ClipboardCopy size={14} />}

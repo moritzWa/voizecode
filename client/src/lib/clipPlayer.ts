@@ -3,16 +3,21 @@
 // Each clip arrives as mp3 byte chunks (pushChunk) terminated by endClip. When the browser
 // supports MediaSource for mp3, chunks are appended to a SourceBuffer so a long clip starts
 // playing before it finishes downloading (true streaming). Otherwise we accumulate the clip
-// and play it as one Blob (non-streaming fallback, e.g. desktop Safari). Either way audio
-// plays through an HTMLAudioElement, so playbackRate stays pitch-preserved.
+// and play it as one Blob (non-streaming fallback, e.g. desktop Safari).
 //
-// Clips play strictly in arrival order, one at a time, with a natural tiny gap between them.
+// All clips play through ONE persistent HTMLAudioElement (src swapped per clip). This matters:
+// - Autoplay policy: a fresh `new Audio()` per clip can never be gesture-unlocked, so on an
+//   origin without autoplay permission every reply was silently dropped (play() rejected ->
+//   clip discarded). One element gets unlocked once (unlock(), or any pointer/key gesture via
+//   the document listener) and stays blessed. A blocked clip now WAITS instead of dropping.
+// - iOS lock-screen (future): background audio requires reusing one element, never creating
+//   media elements while backgrounded.
+// playbackRate stays pitch-preserved. Clips play strictly in arrival order, one at a time.
 
 type SpeakingCb = (b: boolean) => void;
 
 interface Clip {
   id: number;
-  audio: HTMLAudioElement;
   url: string;
   // MSE mode
   ms?: MediaSource;
@@ -27,6 +32,10 @@ interface Clip {
 const MSE_MP3 = typeof window !== "undefined" && "MediaSource" in window &&
   (() => { try { return MediaSource.isTypeSupported("audio/mpeg"); } catch { return false; } })();
 
+// ~1ms of silence; playing it inside a user gesture blesses the element for later
+// programmatic play() calls.
+const SILENT_WAV = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+
 export class ClipPlayer {
   private building = new Map<number, Clip>();
   private order: number[] = [];
@@ -34,18 +43,52 @@ export class ClipPlayer {
   private rate = 1;
   private speaking = false;
   private paused = false;
+  private el: HTMLAudioElement | null = null;
+  private blocked = false; // play() was rejected by autoplay policy; retry on next gesture
   // onClip(id) when a clip starts playing, onClip(null) when nothing is playing (for UI highlight).
   // onProgress(id, t) on each timeupdate of the playing clip (media-time seconds, for word highlight).
-  constructor(private onSpeaking?: SpeakingCb, private onClip?: (clip: number | null) => void, private onProgress?: (clip: number, t: number) => void) {}
+  constructor(private onSpeaking?: SpeakingCb, private onClip?: (clip: number | null) => void, private onProgress?: (clip: number, t: number) => void) {
+    if (typeof document !== "undefined") {
+      // Any gesture retries blocked playback (and pre-blesses the element the first time).
+      const retry = () => this.unlock();
+      document.addEventListener("pointerdown", retry, { capture: true });
+      document.addEventListener("keydown", retry, { capture: true });
+    }
+  }
+
+  private element(): HTMLAudioElement {
+    if (this.el) return this.el;
+    const el = new Audio();
+    (el as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
+    el.addEventListener("ended", () => { if (this.current) this.finishCurrent(); });
+    el.addEventListener("error", () => { if (this.current) this.finishCurrent(); });
+    el.addEventListener("timeupdate", () => { if (this.current) this.onProgress?.(this.current.id, el.currentTime); });
+    this.el = el;
+    return el;
+  }
+
+  // Call from a user gesture. Retries a policy-blocked clip, or primes the idle element with a
+  // beat of silence so future programmatic play() calls are allowed.
+  unlock() {
+    const el = this.element();
+    if (this.current) {
+      if (this.blocked) { this.blocked = false; this.play(this.current); }
+      return; // playing fine — don't touch the element
+    }
+    try {
+      el.src = SILENT_WAV;
+      el.play().then(() => { el.pause(); el.removeAttribute("src"); el.load(); }).catch(() => { /* not a real gesture context */ });
+    } catch { /* noop */ }
+  }
 
   isPlaying() { return !!this.current; }
   isPaused() { return this.paused; }
-  setRate(r: number) { this.rate = r; if (this.current) this.current.audio.playbackRate = r; }
+  setRate(r: number) { this.rate = r; if (this.el && this.current) this.el.playbackRate = r; }
 
   // Pause/resume the current utterance without tearing down the queue (for VAD ducking:
   // pause on possible speech, resume if it turns out to be noise).
-  pause() { if (this.current && !this.paused) { this.paused = true; try { this.current.audio.pause(); } catch { /* noop */ } } }
-  resume() { if (this.paused) { this.paused = false; if (this.current) this.current.audio.play().catch(() => {}); } }
+  pause() { if (this.current && !this.paused) { this.paused = true; try { this.el?.pause(); } catch { /* noop */ } } }
+  resume() { if (this.paused) { this.paused = false; if (this.current) this.play(this.current); } }
 
   pushChunk(id: number, bytes: Uint8Array) {
     const clip = this.ensure(id);
@@ -60,8 +103,7 @@ export class ClipPlayer {
     if (MSE_MP3) { this.pump(clip); }
     else { // build the whole-clip blob now and make it playable
       const blob = new Blob((clip.blobChunks ?? []) as BlobPart[], { type: "audio/mpeg" });
-      clip.audio.src = URL.createObjectURL(blob);
-      clip.url = clip.audio.src;
+      clip.url = URL.createObjectURL(blob);
       clip.playable = true;
       if (this.current === clip) this.play(clip);
     }
@@ -69,9 +111,8 @@ export class ClipPlayer {
 
   stop() { // barge-in / switch away: drop everything
     for (const id of this.order) this.teardown(this.building.get(id));
-    if (this.current) this.teardown(this.current);
     this.building.clear(); this.order = []; this.current = null;
-    this.paused = false;
+    this.paused = false; this.blocked = false;
     this.emit(false);
     this.onClip?.(null);
   }
@@ -79,17 +120,13 @@ export class ClipPlayer {
   private ensure(id: number): Clip {
     let clip = this.building.get(id);
     if (clip) return clip;
-    const audio = new Audio();
-    (audio as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = true;
-    audio.playbackRate = this.rate;
-    clip = { id, audio, url: "", appendQ: [], ended: false, playable: false };
+    clip = { id, url: "", appendQ: [], ended: false, playable: false };
     if (MSE_MP3) {
       const ms = new MediaSource();
       clip.ms = ms;
       clip.url = URL.createObjectURL(ms);
-      audio.src = clip.url;
       clip.playable = true; // MSE can play() immediately and buffer
-      ms.addEventListener("sourceopen", () => {
+      ms.addEventListener("sourceopen", () => { // fires once this clip's url is loaded into the element
         if (ms.readyState !== "open" || clip!.sb) return;
         try {
           const sb = ms.addSourceBuffer("audio/mpeg");
@@ -99,9 +136,6 @@ export class ClipPlayer {
         } catch { /* unsupported codec mid-stream */ }
       });
     }
-    audio.addEventListener("ended", () => this.onEnded(clip!));
-    audio.addEventListener("error", () => this.onEnded(clip!));
-    audio.addEventListener("timeupdate", () => { if (this.current?.id === id) this.onProgress?.(id, audio.currentTime); });
     this.building.set(id, clip);
     this.order.push(id);
     this.startNext();
@@ -133,28 +167,33 @@ export class ClipPlayer {
 
   private play(clip: Clip) {
     if (this.paused) return; // resume() will start it
-    clip.audio.playbackRate = this.rate;
-    clip.audio.play().then(() => this.emit(true)).catch(() => this.onEnded(clip));
+    const el = this.element();
+    if (el.src !== clip.url) el.src = clip.url; // swapping src attaches this clip's MediaSource/blob
+    el.playbackRate = this.rate;
+    el.play()
+      .then(() => { this.blocked = false; this.emit(true); })
+      .catch(() => { this.blocked = true; /* keep the clip queued; a gesture (unlock) retries */ });
   }
 
-  private onEnded(clip: Clip) {
-    const wasCurrent = this.current?.id === clip.id;
+  private finishCurrent() {
+    const clip = this.current;
+    if (!clip) return;
     this.teardown(clip);
     this.building.delete(clip.id);
     this.order = this.order.filter((x) => x !== clip.id);
-    if (wasCurrent) {
-      this.current = null;
-      if (!this.order.length) this.emit(false);
-      this.startNext();
-      if (!this.current) this.onClip?.(null); // nothing left to play -> clear highlight
-    }
+    this.current = null;
+    if (!this.order.length) this.emit(false);
+    this.startNext();
+    if (!this.current) this.onClip?.(null); // nothing left to play -> clear highlight
   }
 
   private teardown(clip?: Clip) {
     if (!clip) return;
-    try { clip.audio.pause(); } catch { /* noop */ }
+    const el = this.el;
+    if (el && clip.url && el.src === clip.url) {
+      try { el.pause(); el.removeAttribute("src"); el.load(); } catch { /* noop */ }
+    }
     try { if (clip.sb && !clip.sb.updating && clip.ms?.readyState === "open") clip.ms.endOfStream(); } catch { /* noop */ }
-    try { clip.audio.removeAttribute("src"); clip.audio.load(); } catch { /* noop */ }
     try { if (clip.url) URL.revokeObjectURL(clip.url); } catch { /* noop */ }
     clip.appendQ = [];
     clip.blobChunks = undefined;
