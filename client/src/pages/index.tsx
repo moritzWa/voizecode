@@ -353,16 +353,17 @@ export default function Home() {
     <main className="mx-auto flex h-[100dvh] max-w-2xl flex-col gap-2 overflow-hidden p-2 sm:gap-3 sm:p-4">
       {/* no top bar — tabs are the top edge; connection dot lives at their far right */}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-end gap-1 overflow-x-auto overflow-y-hidden pt-1">
+        {/* detached pill tabs (new-VS-Code style): rounded on all sides, small gap to the panel */}
+        <div className="mb-1.5 flex items-center gap-1.5 overflow-x-auto overflow-y-hidden pt-1">
           {v.sessions.length === 0 && <span className="px-1 pb-2 text-xs text-muted-foreground">no sessions — start the laptop agent</span>}
           {v.sessions.map((s) => {
             const activeTab = s.sessionId === v.activeId;
             const title = v.titles[s.sessionId];
             return (
               <div key={s.sessionId}
-                className={cn("flex max-w-[230px] items-center gap-1 rounded-t-lg border border-b-0 pl-3 pr-1 text-sm",
-                  activeTab ? "-mb-px border-border bg-card" : "border-transparent bg-muted text-muted-foreground hover:bg-muted/70")}>
-                <button onClick={() => v.switchSession(s.sessionId)} className="flex min-w-0 items-center gap-1.5 py-2">
+                className={cn("flex max-w-[230px] items-center gap-0.5 rounded-lg border pl-3 pr-1 text-sm",
+                  activeTab ? "border-border bg-card" : "border-transparent bg-muted text-muted-foreground hover:bg-muted/70")}>
+                <button onClick={() => v.switchSession(s.sessionId)} className="flex min-w-0 items-center gap-1.5 py-1.5">
                   <span className="truncate">
                     <span className="font-medium">{s.label}</span>
                     {title && <span className="text-muted-foreground"> · {title}</span>}
@@ -370,7 +371,7 @@ export default function Home() {
                   {v.unread[s.sessionId] && !activeTab && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
                 </button>
                 {v.sessions.length > 1 && (
-                  <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0 opacity-60 hover:opacity-100" onClick={() => v.closeSession(s.sessionId)} title="Close chat (ends its claude)" aria-label="Close chat">
+                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-md opacity-60 hover:opacity-100" onClick={() => v.closeSession(s.sessionId)} title="Close chat (ends its claude)" aria-label="Close chat">
                     <X size={12} />
                   </Button>
                 )}
@@ -378,7 +379,7 @@ export default function Home() {
             );
           })}
           {v.sessions.length > 0 && (
-            <Button variant="ghost" size="icon" className="mb-px h-8 shrink-0" onClick={openBrowser} title="New chat" aria-label="New chat">
+            <Button variant="ghost" size="icon" className="h-8 shrink-0" onClick={openBrowser} title="New chat" aria-label="New chat">
               <Plus size={15} />
             </Button>
           )}
@@ -387,7 +388,7 @@ export default function Home() {
             style={{ background: v.connected ? "#16a34a" : "#dc2626" }} />
         </div>
 
-        <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg rounded-tl-none border bg-card p-3">
+        <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg border bg-card p-3">
           {(() => { let userSeen = 0; return v.lines.map((l, i) => {
             if (l.kind === "agent") return <AgentMessage key={i} text={l.text} />;
             if (l.kind === "speech") {

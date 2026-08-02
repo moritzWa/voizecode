@@ -408,6 +408,8 @@ const NARRATE_SYSTEM =
   "- Tables: speak them as short natural sentences (e.g. 'X uses A, Y uses B') instead of reading cells.\n" +
   "- Code blocks: describe them in a sentence or two (name the key function/change), don't read code character by character.\n" +
   "- Long file paths / raw identifiers: use the short name (e.g. 'auth.ts' not the full path).\n" +
+  "- File:line references like `foo.ts:216-232`: drop the line numbers entirely and name the place naturally " +
+  "('in the write pipeline') — nobody can click or remember them when listening.\n" +
   "- Headings become a brief spoken lead-in; bullet lists become natural list phrasing — but keep their content and order.\n" +
   "Preserve all the actual information, explanations, and section flow. If the reply is already plain prose, output it " +
   "essentially as-is (just spoken-natural). " +
@@ -425,23 +427,44 @@ const NARRATE_SYSTEM =
 // which would leave an unbalanced `**` rendering literally on the client); a `.`/`!`/`?` is only a
 // boundary when the next char is whitespace or end of buffer (keeps decimals like 3.14 intact).
 function takeSentences(b: string): { done: string[]; rest: string } {
-  const done: string[] = [];
+  const raw: string[] = [];
   let start = 0, tick = false, bold = false;
   for (let i = 0; i < b.length; i++) {
     const c = b[i];
     if (c === "`") { tick = !tick; continue; }
     if (!tick && c === "*" && b[i + 1] === "*") { bold = !bold; i++; continue; } // toggle on each **
+    if (!tick && c === "\n") { // newline = paragraph/bullet boundary — bullets carry no terminator,
+      const chunk = b.slice(start, i).trim(); // so without this a whole list glues into one clip
+      if (chunk) raw.push(chunk);
+      start = i + 1;
+      continue;
+    }
     if (tick || bold || (c !== "." && c !== "!" && c !== "?")) continue;
     let j = i;
     while (j + 1 < b.length && ".!?".includes(b[j + 1])) j++; // consume "?!" / "..." runs
     const after = b[j + 1];
     if (after === undefined || after === " " || after === "\n" || after === "\t") {
-      done.push(b.slice(start, j + 1).trim());
+      const chunk = b.slice(start, j + 1).trim();
+      if (chunk) raw.push(chunk);
       start = j + 1;
     }
     i = j;
   }
-  return { done: done.filter(Boolean), rest: b.slice(start) };
+  // A bare list marker ("2." / "-") is not a sentence — glue it onto the chunk that follows
+  // (or onto the unfinished rest) instead of emitting an orphan "2." line/clip.
+  const isMarker = (t: string) => /^(\d+[.)]|[-*•])$/.test(t);
+  const done: string[] = [];
+  let carry = "";
+  for (let chunk of raw) {
+    if (isMarker(chunk)) { carry = carry ? `${carry} ${chunk}` : chunk; continue; }
+    // "Header: 1." — a list number glued to a colon header belongs to the NEXT chunk. (Only after
+    // a colon: a real sentence like "use python 3." must stay intact.)
+    const header = chunk.match(/^(.*:\**)\s+(\d+[.)])$/);
+    if (header) { chunk = header[1]; carry = carry ? `${carry} ${header[2]}` : header[2]; done.push(chunk); continue; }
+    done.push(carry ? `${carry} ${chunk}` : chunk);
+    carry = "";
+  }
+  return { done, rest: (carry ? `${carry} ` : "") + b.slice(start) };
 }
 
 async function narrateFinal(s: Session, fullText: string) {
