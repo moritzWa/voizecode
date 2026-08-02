@@ -151,8 +151,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Two different clients, and they do NOT talk to the same relay — see openWeb/openElectron.
         let web = NSMenuItem(title: "Open voizecode.com (web)", action: #selector(openWeb), keyEquivalent: "")
         web.target = self
-        web.toolTip = "Deployed app on fly.dev — the relay the running agent is actually on"
+        web.toolTip = "Deployed app on voizecode.com — the relay the running agent is actually on"
         menu.addItem(web)
+
+        let copy = NSMenuItem(title: "Copy access code", action: #selector(copyCode), keyEquivalent: "")
+        copy.target = self
+        copy.toolTip = "The code the web app's access gate asks for (~/.voizecode/token)"
+        menu.addItem(copy)
 
         let electron = NSMenuItem(
             title: "Open Electron app (local dev stack)",
@@ -192,16 +197,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sessions.forEach { terminate($0.pid) }
     }
 
+    /// The access code the laptop agent owns (bin/voize prints the same one).
+    func accessToken() -> String {
+        let tokenPath = NSString(string: "~/.voizecode/token").expandingTildeInPath
+        return (try? String(contentsOfFile: tokenPath, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
     /// The deployed client, keyed with the same token `bin/voize` prints. This is the one
     /// that reaches the LaunchAgent agent (voizecode.com serves the same Fly app the
     /// agent's relay pairs with).
     @objc func openWeb() {
-        let tokenPath = NSString(string: "~/.voizecode/token").expandingTildeInPath
-        let token = (try? String(contentsOfFile: tokenPath, encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = accessToken()
         let base = "https://voizecode.com/"
         let urlStr = token.isEmpty ? base : "\(base)?key=\(token)"
         if let url = URL(string: urlStr) { NSWorkspace.shared.open(url) }
+    }
+
+    /// For logging in on another device (e.g. the phone's access gate): put the code on the
+    /// clipboard, to paste via Universal Clipboard or a message to yourself.
+    @objc func copyCode() {
+        let token = accessToken()
+        guard !token.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(token, forType: .string)
     }
 
     /// Electron hardcodes localhost (main.js) and its ensureServices() runs `npm run dev`,
