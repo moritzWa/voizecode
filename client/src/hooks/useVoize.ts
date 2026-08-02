@@ -96,6 +96,11 @@ export function useVoize() {
   // auto-resumed via new_session+resumeId, so open tabs survive both refreshes and agent restarts.
   const sessionsRef = useRef<SessionInfo[]>([]);
   const restoredTabs = useRef<Set<string>>(new Set()); // sids we already fired a resume for
+  // Saved focus, read ONCE at mount — the boot auto-pick persists its own choice immediately,
+  // which would clobber the saved one before a restored tab has a chance to reappear.
+  const savedActive = useRef<{ sid: string; label?: string } | null>(
+    typeof window === "undefined" ? null : (() => { try { return JSON.parse(localStorage.getItem(ACTIVE_KEY) || "null"); } catch { return null; } })());
+  const refocused = useRef(false); // saved focus applied (or user switched manually) — stop matching
   const [voice, setVoiceState] = useState(DEFAULT_VOICE);
   const voiceRef = useRef(voice);
   const [mics, setMics] = useState<{ id: string; label: string }[]>([]);
@@ -159,7 +164,11 @@ export function useVoize() {
     return () => navigator.mediaDevices?.removeEventListener?.("devicechange", refreshMics);
   }, [refreshMics]);
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(convos)); } catch { /* quota */ } }, [convos]);
-  useEffect(() => { if (activeId) try { localStorage.setItem(ACTIVE_KEY, activeId); } catch { /* quota */ } }, [activeId]);
+  useEffect(() => {
+    if (!activeId) return;
+    const label = sessionsRef.current.find((s) => s.sessionId === activeId)?.label;
+    try { localStorage.setItem(ACTIVE_KEY, JSON.stringify({ sid: activeId, label })); } catch { /* quota */ }
+  }, [activeId, sessions]);
   useEffect(() => { (window as unknown as { __voizePending?: unknown }).__voizePending = pending.current; }, []);
 
   const send = (m: unknown) => ws.current?.readyState === WebSocket.OPEN && ws.current.send(JSON.stringify(m));
@@ -251,9 +260,17 @@ export function useVoize() {
           setSessions(m.sessions);
           sessionsRef.current = m.sessions;
           setActiveId((cur) => {
-            if (cur) return cur;
-            const saved = typeof window !== "undefined" ? localStorage.getItem(ACTIVE_KEY) : null;
-            return saved && incoming.includes(saved) ? saved : (incoming[0] || "");
+            const saved = savedActive.current;
+            if (!cur) { // boot: prefer the tab that was focused before the refresh
+              if (saved?.sid && incoming.includes(saved.sid)) { refocused.current = true; return saved.sid; }
+              return incoming[0] || "";
+            }
+            // A restored tab reappears under a NEW sid — match it by label and take the focus back.
+            if (!refocused.current && saved?.label) {
+              const match = fresh.find((id) => m.sessions.find((x: SessionInfo) => x.sessionId === id)?.label === saved.label);
+              if (match) { refocused.current = true; return match; }
+            }
+            return cur;
           });
           // Resume remembered tabs whose chat no longer exists (agent restart dropped it).
           try {
@@ -383,6 +400,7 @@ export function useVoize() {
   // switching tabs: stop current audio, clear unread, then play whatever this
   // session queued while it was unfocused.
   const switchSession = useCallback((sid: string) => {
+    refocused.current = true; // a manual switch outranks any pending focus-restore
     if (ramblingRef.current) { send({ t: "ramble", sessionId: activeRef.current, on: false }); setRambling(false); ramblingRef.current = false; }
     stopAudio();
     setActiveId(sid);

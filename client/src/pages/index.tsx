@@ -132,6 +132,26 @@ function SettingsModal({ v, onClose }: { v: ReturnType<typeof useVoize>; onClose
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close"><X size={15} /></Button>
         </div>
         <div className="divide-y px-4 py-2">
+          <div className="py-2">
+            <div className="mb-2 text-sm font-medium">Claude model</div>
+            <Select value={v.model} onValueChange={v.setModel}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="haiku">haiku</SelectItem>
+                <SelectItem value="sonnet">sonnet</SelectItem>
+                <SelectItem value="opus">opus</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="py-2">
+            <div className="mb-2 text-sm font-medium">Narrator voice</div>
+            <Select value={v.voice} onValueChange={v.setVoice}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
           <SettingRow title="Ambient thinking sound" desc="Soft shimmer while the agent is working." on={v.thinkingSound} onChange={v.setThinkingSound} />
           <div className="py-2">
             <div className="flex items-center justify-between"><div className="text-sm font-medium">Playback speed</div><div className="text-xs text-muted-foreground">{v.rate.toFixed(1)}x</div></div>
@@ -325,21 +345,7 @@ export default function Home() {
           <Plus size={15} />
         </Button>
         <div className="ml-auto flex items-center gap-1.5">
-          <Select value={v.model} onValueChange={v.setModel}>
-            <SelectTrigger className="h-7 w-[84px] text-xs" title="Claude model"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="haiku">haiku</SelectItem>
-              <SelectItem value="sonnet">sonnet</SelectItem>
-              <SelectItem value="opus">opus</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={v.voice} onValueChange={v.setVoice}>
-            <SelectTrigger className="h-7 w-[110px] text-xs" title="Narrator voice"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {VOICES.map((vo) => <SelectItem key={vo.id} value={vo.id}>{vo.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings" onClick={() => setSettings(true)} aria-label="Settings">
+          <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings (model, voice, mic, speed)" onClick={() => setSettings(true)} aria-label="Settings">
             <Settings size={14} />
           </Button>
         </div>
