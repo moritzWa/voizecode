@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
+  future: { hoverOnlyWhenSupported: true }, // touch scroll must not trigger sticky hover: styles
   darkMode: ["class"], // next-themes toggles .dark; defaultTheme="system" follows the OS
   content: ["./src/**/*.{ts,tsx}"],
   theme: {

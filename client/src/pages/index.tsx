@@ -325,6 +325,14 @@ export default function Home() {
   const isCodexChat = v.model === "codex"; // forking is Claude-only
   const openBrowser = () => { v.requestSessions(); setBrowser(true); };
   const growInput = (el: HTMLTextAreaElement) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; };
+  // Play/pause; when RESUMING, scroll the transcript back to the line being read (the user may
+  // have scrolled elsewhere while paused — the purple word-highlight is the reading position).
+  const resumeAndReveal = () => {
+    const resuming = v.paused, clip = v.speakingClip;
+    v.togglePlayback();
+    if (resuming && clip != null) requestAnimationFrame(() =>
+      document.querySelector(`[data-clip="${clip}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  };
   const resetInput = () => { setDraft(""); setForkPoint(null); if (taRef.current) taRef.current.style.height = "auto"; };
   const submit = () => {
     if (!draft.trim()) return;
@@ -336,7 +344,9 @@ export default function Home() {
   if (v.authError) return <AccessGate onSubmit={v.submitCode} />;
 
   return (
-    <main className="mx-auto flex h-screen max-w-2xl flex-col gap-3 p-4">
+    // 100dvh (not h-screen/100vh): on mobile Safari 100vh includes the browser chrome, which
+    // made the page itself scrollable alongside the transcript. Only the transcript scrolls.
+    <main className="mx-auto flex h-[100dvh] max-w-2xl flex-col gap-2 overflow-hidden p-2 sm:gap-3 sm:p-4">
       <header className="flex items-center gap-1.5">
         <span className="h-2 w-2 shrink-0 rounded-full" title={v.connected ? "connected" : "connecting…"}
           style={{ background: v.connected ? "#16a34a" : "#dc2626" }} />
@@ -391,9 +401,9 @@ export default function Home() {
               const active = l.clip != null && l.clip === v.speakingClip;
               const words = l.clip != null ? v.clipWords[l.clip] : undefined;
               return (
-                <div key={i} onClick={() => l.key && v.replayClip(l)}
+                <div key={i} onClick={() => l.key && v.replayClip(l)} data-clip={l.clip}
                   title={l.key ? "Click to replay" : undefined}
-                  className={cn("break-words rounded px-1 py-0.5 text-sm transition-colors",
+                  className={cn("select-none break-words rounded px-1 py-0.5 text-sm transition-colors",
                     active ? "bg-[#e7e6fb] dark:bg-indigo-400/15" : l.key && "cursor-pointer hover:bg-muted")}>
                   <SpokenLine words={active && words?.length ? words : []} t={active ? v.speakingTime : 0} text={l.text} />
                 </div>
@@ -429,26 +439,28 @@ export default function Home() {
           <Button variant="outline" size="xl" className="flex-1 font-semibold" onClick={() => v.start(true)}>
             <AudioLines size={18} /> Ramble
           </Button>
-          <Button variant="outline" size="xl" className="px-4" onClick={v.togglePlayback}
+          <Button variant="outline" size="xl" className="px-4" onClick={resumeAndReveal}
             title={v.paused ? "Resume" : "Pause (or click a line to replay)"} aria-label="Play or pause">
             {v.paused ? <Play size={18} /> : <Pause size={18} />}
           </Button>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          {/* ramble/dictation: talk freely with pauses; the agent waits until you tap to send */}
-          <Button size="xl" className={cn("text-base font-semibold", v.rambling && "bg-red-600 text-white hover:bg-red-700")}
-            variant={v.rambling ? "default" : "outline"} onClick={v.toggleRamble}>
-            {v.rambling
-              ? <><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white" /> Recording — tap to send</>
-              : <><AudioLines size={20} /> Ramble (talk freely, send when done)</>}
-          </Button>
-          {/* large primary mute toggle — silence ambient talk without ending the call */}
-          <Button size="xl" variant={v.muted ? "destructive" : "secondary"} className="text-base font-semibold" onClick={v.toggleMute}>
-            {v.muted ? <><MicOff size={22} /> Muted — tap to talk</> : <><Mic size={22} /> Mute mic</>}
-          </Button>
           <div className="flex gap-2">
-            <Button variant="outline" className="px-4" onClick={v.togglePlayback}
+            {/* ramble/dictation: talk freely with pauses; the agent waits until you tap to send */}
+            <Button size="xl" className={cn("flex-1 font-semibold", v.rambling && "bg-red-600 text-white hover:bg-red-700")}
+              variant={v.rambling ? "default" : "outline"} onClick={v.toggleRamble}>
+              {v.rambling
+                ? <><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white" /> Tap to send</>
+                : <><AudioLines size={18} /> Ramble</>}
+            </Button>
+            {/* mute toggle — silence ambient talk without ending the call */}
+            <Button size="xl" variant={v.muted ? "destructive" : "secondary"} className="flex-1 font-semibold" onClick={v.toggleMute}>
+              {v.muted ? <><MicOff size={18} /> Muted</> : <><Mic size={18} /> Mute</>}
+            </Button>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="px-4" onClick={resumeAndReveal}
               title={v.paused ? "Resume" : "Pause (or click a line to replay)"} aria-label="Play or pause">
               {v.paused ? <Play size={15} /> : <Pause size={15} />}
             </Button>

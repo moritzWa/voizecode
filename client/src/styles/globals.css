@@ -3,6 +3,10 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    /* no gray flash on tap targets (iOS Safari) — the app has its own active/hover styles */
+    -webkit-tap-highlight-color: transparent;
+  }
   :root {
     /* fallback so portals (Radix menus on <body>) never fall back to serif before the
        next/font variable is applied to <html>; the app wrapper overrides this with Inter */
