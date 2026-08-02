@@ -235,9 +235,8 @@ function prBucket(createdAt: string): string {
 function PRModal({ v, onPick, onClose }: { v: ReturnType<typeof useVoize>; onPick: (pr: { number: number; title: string; url: string }) => void; onClose: () => void }) {
   const [q, setQ] = useState("");
   const [scope, setScope] = useState<"mine" | "all">("mine");
-  const [loading, setLoading] = useState(true);
-  useEffect(() => { setLoading(true); v.requestPRs(scope); }, [scope]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setLoading(false); }, [v.prs]);
+  useEffect(() => { v.requestPRs(scope); }, [scope]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loading = v.prsLoading; // in-flight flag lives in the hook — clearing the list is not "done"
   const query = q.trim().toLowerCase();
   const filtered = query ? v.prs.filter((p) => p.title.toLowerCase().includes(query)) : v.prs;
   let lastBucket = "";
@@ -265,7 +264,12 @@ function PRModal({ v, onPick, onClose }: { v: ReturnType<typeof useVoize>; onPic
           </div>
         </div>
         <div className="overflow-y-auto p-2">
-          {loading && <div className="px-2 py-3 text-xs text-muted-foreground">Loading PRs…</div>}
+          {loading && [0, 1, 2, 3].map((i) => ( // skeleton rows while gh fetches (can take seconds)
+            <div key={i} className="flex animate-pulse items-center gap-2 px-2 py-2.5">
+              <div className="h-4 w-4 shrink-0 rounded bg-muted" />
+              <div className="h-3.5 rounded bg-muted" style={{ width: `${72 - i * 12}%` }} />
+            </div>
+          ))}
           {!loading && v.prs.length === 0 && <div className="px-2 py-3 text-xs text-muted-foreground">No {scope === "all" ? "" : "authored "}PRs found in this repo (needs <code>gh</code> auth + a GitHub remote).</div>}
           {!loading && v.prs.length > 0 && filtered.length === 0 && <div className="px-2 py-3 text-xs text-muted-foreground">No PRs match “{q}”.</div>}
           {!loading && filtered.map((p) => {
@@ -347,21 +351,7 @@ export default function Home() {
     // 100dvh (not h-screen/100vh): on mobile Safari 100vh includes the browser chrome, which
     // made the page itself scrollable alongside the transcript. Only the transcript scrolls.
     <main className="mx-auto flex h-[100dvh] max-w-2xl flex-col gap-2 overflow-hidden p-2 sm:gap-3 sm:p-4">
-      <header className="flex items-center gap-1.5">
-        <span className="h-2 w-2 shrink-0 rounded-full" title={v.connected ? "connected" : "connecting…"}
-          style={{ background: v.connected ? "#16a34a" : "#dc2626" }} />
-        <span className="text-sm font-semibold">voizecode</span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={openBrowser} title="Open or start a chat" aria-label="New chat">
-          <Plus size={15} />
-        </Button>
-        <div className="ml-auto flex items-center gap-1.5">
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Settings (model, voice, mic, speed)" onClick={() => setSettings(true)} aria-label="Settings">
-            <Settings size={14} />
-          </Button>
-        </div>
-      </header>
-
-      {/* session tabs attached to the chat panel (no gap) */}
+      {/* no top bar — tabs are the top edge; connection dot lives at their far right */}
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-end gap-1 overflow-x-auto overflow-y-hidden pt-1">
           {v.sessions.length === 0 && <span className="px-1 pb-2 text-xs text-muted-foreground">no sessions — start the laptop agent</span>}
@@ -392,6 +382,9 @@ export default function Home() {
               <Plus size={15} />
             </Button>
           )}
+          <span className="ml-auto mr-1.5 h-2 w-2 shrink-0 self-center rounded-full"
+            title={v.connected ? "connected" : "connecting…"}
+            style={{ background: v.connected ? "#16a34a" : "#dc2626" }} />
         </div>
 
         <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg rounded-tl-none border bg-card p-3">
@@ -477,6 +470,8 @@ export default function Home() {
         </div>
       )}
       <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <Button type="button" variant="outline" size="icon" title="Settings (model, voice, mic, speed)"
+          onClick={() => setSettings(true)} aria-label="Settings"><Settings size={15} /></Button>
         <Button type="button" variant="outline" size="icon" title="Talk through one of your PRs"
           onClick={() => setPrModal(true)}><GitPullRequest size={15} /></Button>
         <Textarea ref={taRef} rows={1} value={draft}

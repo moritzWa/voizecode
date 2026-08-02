@@ -90,6 +90,7 @@ export function useVoize() {
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]); // past sessions (browser)
   const [projects, setProjects] = useState<ProjectInfo[]>([]);            // dirs that have sessions
   const [prs, setPrs] = useState<{ number: number; title: string; url: string; createdAt: string; isDraft: boolean; author?: string }[]>([]);
+  const [prsLoading, setPrsLoading] = useState(false); // a list_prs request is in flight (gh can take seconds)
   const [metas, setMetas] = useState<Record<string, { claudeSessionId: string; cwd: string }>>({}); // debug info per chat
   // Open-tab memory: {sid: {claudeSessionId, cwd, label}} in localStorage. A tab whose session is
   // missing from a `sessions` broadcast (page refresh after an agent restart killed its chat) is
@@ -315,7 +316,7 @@ export function useVoize() {
           if (forkSend.current && forkSend.current.sid === sid) { const t = forkSend.current.text; forkSend.current = null; send({ t: "text", sessionId: sid, text: t }); }
           break;
         case "words": setClipWords((p) => ({ ...p, [m.clip]: m.words })); break;
-        case "prs": setPrs(m.prs || []); break;
+        case "prs": setPrs(m.prs || []); setPrsLoading(false); break;
         case "history": { // resumed transcript -> fill the viewer
           const lines: Line[] = (m.messages || []).map((mm: { role: string; text: string }) =>
             ({ kind: mm.role === "user" ? "user" : "agent", text: mm.text }));
@@ -583,7 +584,7 @@ export function useVoize() {
   const newSession = useCallback(() => { wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current }); }, []);
   // Session browser: fetch past sessions/projects, resume one, or start fresh in a project dir.
   const requestSessions = useCallback(() => send({ t: "list_sessions", sessionId: activeRef.current }), []);
-  const requestPRs = useCallback((scope: "mine" | "all" = "mine") => { setPrs([]); send({ t: "list_prs", sessionId: activeRef.current, scope }); }, []);
+  const requestPRs = useCallback((scope: "mine" | "all" = "mine") => { setPrs([]); setPrsLoading(true); send({ t: "list_prs", sessionId: activeRef.current, scope }); }, []);
   const openSession = useCallback((id: string, cwd: string, label: string, engine = "claude") => {
     wantNew.current = true; send({ t: "new_session", sessionId: activeRef.current, cwd, resumeId: id, label, engine });
   }, []);
@@ -649,7 +650,7 @@ export function useVoize() {
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
     voice, setVoice, clearChat, newSession, closeSession, mics, micPref, setMicPref, muted, toggleMute, speakingClip,
     savedSessions, projects, requestSessions, openSession, newInProject, titles, copyDebug,
-    thinkingSound, setThinkingSound, speakingTime, clipWords, prs, requestPRs, replayClip,
+    thinkingSound, setThinkingSound, speakingTime, clipWords, prs, prsLoading, requestPRs, replayClip,
     paused, togglePlayback, rambling, toggleRamble, forkChat,
     authError, submitCode,
   };

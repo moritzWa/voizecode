@@ -1,4 +1,5 @@
 import type { AppProps } from "next/app";
+import Head from "next/head";
 import { useEffect } from "react";
 import { Inter } from "next/font/google";
 import { ThemeProvider } from "@/components/ThemeProvider";
@@ -14,6 +15,11 @@ export default function App({ Component, pageProps }: AppProps) {
   }, []);
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+      <Head>
+        {/* maximum-scale=1 stops iOS Safari auto-zooming on input focus; pinch-zoom still works
+            (Safari ignores the cap for user-initiated zoom since iOS 10). */}
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+      </Head>
       <div className={`${sans.variable} font-sans antialiased`}>
         <Component {...pageProps} />
       </div>
