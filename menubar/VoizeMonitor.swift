@@ -193,12 +193,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// The deployed client, keyed with the same token `bin/voize` prints. This is the one
-    /// that reaches the LaunchAgent agent, since that agent is pointed at wss://…fly.dev.
+    /// that reaches the LaunchAgent agent (voizecode.com serves the same Fly app the
+    /// agent's relay pairs with).
     @objc func openWeb() {
         let tokenPath = NSString(string: "~/.voizecode/token").expandingTildeInPath
         let token = (try? String(contentsOfFile: tokenPath, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let base = "https://voizecode-web.fly.dev/"
+        let base = "https://voizecode.com/"
         let urlStr = token.isEmpty ? base : "\(base)?key=\(token)"
         if let url = URL(string: urlStr) { NSWorkspace.shared.open(url) }
     }
