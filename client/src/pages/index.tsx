@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Mic, MicOff, Square, Hand, Plus, SendHorizontal, X, FolderOpen, History, Settings, GitPullRequest, Search, Play, Pause, AudioLines, Pencil } from "lucide-react";
 import { useVoize, VOICES } from "@/hooks/useVoize";
+import { Landing } from "@/components/Landing";
 import type { SavedSession, ProjectInfo } from "@/hooks/useVoize";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -317,6 +318,8 @@ export default function Home() {
   const [prModal, setPrModal] = useState(false);
   const [forkPoint, setForkPoint] = useState<number | null>(null); // userIndex being edited (fork on send)
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const [landing, setLanding] = useState<boolean | null>(null);
+  useEffect(() => { setLanding(!localStorage.getItem("voize:token")); }, []);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const prevChatRef = useRef<string | null>(null);
   // Auto-scroll the transcript: jump to the bottom when opening/switching a chat, and follow
@@ -345,6 +348,12 @@ export default function Home() {
   };
   const editFrom = (userIndex: number, text: string) => { setForkPoint(userIndex); setDraft(text); requestAnimationFrame(() => { const el = taRef.current; if (el) { el.focus(); growInput(el); } }); };
 
+  // Bare-domain visitors with no stored token get the marketing page; "Open the app" leads to
+  // the access gate. A stored token or a ?key= link (consumed into localStorage by the hook
+  // before this effect runs) skips straight to the app. null until mounted avoids a hydration
+  // flash of the wrong branch.
+  if (landing === null) return null;
+  if (landing) return <Landing onOpen={() => setLanding(false)} />;
   if (v.authError) return <AccessGate onSubmit={v.submitCode} />;
 
   return (
