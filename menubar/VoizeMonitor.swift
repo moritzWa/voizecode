@@ -149,7 +149,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         // Two different clients, and they do NOT talk to the same relay — see openWeb/openElectron.
-        let web = NSMenuItem(title: "Open voizecode (web)", action: #selector(openWeb), keyEquivalent: "")
+        let web = NSMenuItem(title: "Open voizecode.com (web)", action: #selector(openWeb), keyEquivalent: "")
         web.target = self
         web.toolTip = "Deployed app on fly.dev — the relay the running agent is actually on"
         menu.addItem(web)
