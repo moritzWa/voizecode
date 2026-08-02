@@ -13,6 +13,14 @@ export default function App({ Component, pageProps }: AppProps) {
   useEffect(() => {
     for (const c of sans.variable.split(" ")) if (c) document.documentElement.classList.add(c);
   }, []);
+  // Migrate visitors off the legacy Fly hostname (it can't be removed) onto the real domain,
+  // carrying the stored login along as ?key= (localStorage doesn't cross origins).
+  useEffect(() => {
+    if (location.hostname === "voizecode-web.fly.dev") {
+      const t = localStorage.getItem("voize:token");
+      location.replace("https://voizecode.com/" + (t ? `?key=${t}` : ""));
+    }
+  }, []);
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <Head>

@@ -251,10 +251,11 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
       // An error result has no streamed text -> the turn would end in dead silence. Surface it,
       // with a specific nudge for the common case (expired Claude Code login on the laptop).
       if ((m.is_error || m.subtype !== "success") && !text) {
-        const raw = String(m.result || m.error || "unknown error");
+        console.log(`[${sessionId}] error result:`, JSON.stringify(m).slice(0, 500));
+        const raw = String(m.result || m.error || m.subtype || "");
         text = /login|log in|auth|credential|expired|oauth|api key/i.test(raw)
           ? "Claude Code login expired on the laptop — run claude /login there, then ask again."
-          : `claude error: ${raw.slice(0, 200)}`;
+          : `Claude hit an error${raw ? ` (${raw.slice(0, 160)})` : ""} — try again, or check the laptop log.`;
       }
       send({ t: "turn_end", fullText: text });
       turnText = "";
