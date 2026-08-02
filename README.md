@@ -117,7 +117,7 @@ Both cloud tiers run on Fly.io — ONE always-on machine each (`relay/fly.toml`,
 
 ```bash
 cd relay  && flyctl deploy --ha=false    # wss://voizecode-relay.fly.dev
-cd client && flyctl deploy --ha=false    # https://voizecode-web.fly.dev
+cd client && flyctl deploy --ha=false    # https://voizecode.com
 ```
 
 Single-instance hosting is a hard requirement, not a preference: the relay keeps sessions and
