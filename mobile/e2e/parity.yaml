@@ -1,0 +1,38 @@
+# Checks the controls that exist on the web client are present and reachable here. This is a
+# regression guard for feature parity, not for behaviour: it asserts the surface, and
+# real-turn.yaml asserts the protocol.
+#
+#   maestro test e2e/parity.yaml
+#
+# The settings assertions double as an accessibility guard. A Pressable is one accessibility
+# element by default, so wrapping a sheet in one collapses every control inside it into a single
+# concatenated label — invisible to VoiceOver and to this test. If these start failing as a
+# group, look for a missing accessible={false} before assuming the UI moved.
+appId: com.voizecode.app
+---
+- launchApp:
+    clearState: false
+- runFlow:
+    when:
+      visible: "DEVELOPMENT SERVERS"
+    commands:
+      - tapOn: "http://.*:8081"
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+      - tapOn: "Close"
+
+# Voice is the primary input, so Ramble — not the composer — is what proves the app is up.
+- extendedWaitUntil:
+    visible: "Ramble"
+    timeout: 90000
+
+# call controls
+- assertVisible: "Start call"     # the waveform pill; label lives in accessibilityLabel
+
+# Typing is deliberately tucked away behind the keyboard affordance rather than parked on screen.
+- tapOn: "Type a message"
+- assertVisible: "Ask about your code.*"
+- tapOn: "Hide the keyboard"

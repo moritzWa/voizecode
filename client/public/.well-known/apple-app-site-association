@@ -1,0 +1,16 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["74NH893Z4B.com.voizecode.app"],
+        "components": [
+          {
+            "/": "/",
+            "?": { "key": "?*" },
+            "comment": "Only an access-code link opens the app. Copy the phone link on the Mac, paste it on the phone, tap: iOS hands the ?key= straight to voizecode instead of Safari. Plain voizecode.com stays a website."
+          }
+        ]
+      }
+    ]
+  }
+}

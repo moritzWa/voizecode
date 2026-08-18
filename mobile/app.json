@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "voizecode",
+    "slug": "voizecode",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "scheme": "voizecode",
+    "owner": "moritzw42",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.voizecode.app",
+      "supportsTablet": false,
+      "associatedDomains": [
+        "applinks:voizecode.com"
+      ],
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "NSMicrophoneUsageDescription": "voizecode listens so you can talk to your codebase hands-free. Speech is streamed to our relay for transcription while a call is active.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0a0f",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-dev-client",
+      "expo-web-browser",
+      "react-native-audio-api"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "cc576751-971f-487d-b477-89bc50f28918"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/cc576751-971f-487d-b477-89bc50f28918"
+    }
+  }
+}

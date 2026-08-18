@@ -1,0 +1,24 @@
+# Settings sheet contents. Split out of parity.yaml because it cannot be run reliably against a
+# DEV build: expo-dev-client's floating dev-tools button is draggable, parks itself over the
+# top-right of the app, and swallows the tap that opens this sheet — so a failure here says
+# nothing about the app. The overlay does not exist in a release build, where this flow is the
+# real check.
+#
+#   maestro test e2e/settings.yaml     # expect this to be flaky on a dev build
+appId: com.voizecode.app
+---
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible: "Ramble"
+    timeout: 90000
+- tapOn: "App settings"
+- extendedWaitUntil:
+    visible: "Ambient thinking sound"
+    timeout: 20000
+- assertVisible: "Claude model"
+- assertVisible: "Narrator voice"
+- assertVisible: "Playback speed"
+- tapOn: "2.5x"
+- tapOn: "sonnet"
+- tapOn: "Close sheet"

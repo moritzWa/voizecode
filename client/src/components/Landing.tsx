@@ -122,6 +122,7 @@ export function Landing({ onOpen }: { onOpen: () => void }) {
           <span>voizecode — built by <a href="https://github.com/moritzWa">@moritzWa</a></span>
           <span className="spacer" />
           <a href="https://github.com/moritzWa/voizecode">GitHub</a>
+          <a href="/privacy">Privacy</a>
           <button className="btn" onClick={onOpen} style={{ padding: "5px 12px", fontSize: 13 }}>Open the app</button>
         </footer>
       </div>

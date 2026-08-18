@@ -1,0 +1,54 @@
+# Drives one real turn against the live relay and the laptop agent: type a question, confirm it
+# echoes back as a user turn, and confirm the agent starts working and eventually speaks.
+#
+#   maestro test e2e/real-turn.yaml
+#
+# Preconditions: `voize` running on the laptop, the app already authenticated (open the phone
+# link once — the token is stored). This is the test that exercises the parts the fake relay
+# cannot: real STT/narration/TTS, real session ids, real clip keys.
+#
+# Not covered here, and not coverable in a simulator: lock-screen audio and real mic capture.
+appId: com.voizecode.app
+---
+- launchApp:
+    clearState: false          # the stored access token is the point; clearing it hits the gate
+
+# A dev build cold-launches into expo-dev-client's server picker rather than the app. A release
+# build (what ships) skips straight past this, hence the conditional — the same flow has to work
+# against both or it only ever gets run in one of them.
+- runFlow:
+    when:
+      visible: "DEVELOPMENT SERVERS"
+    commands:
+      - tapOn: "http://.*:8081"
+      - extendedWaitUntil:
+          visible: "Ask about your code, or steer the agent"
+          timeout: 90000
+
+# expo-dev-client shows a one-time "this is the developer menu" sheet over the app on first run
+# of a build. Also dev-only, also has to not break the flow on a release build.
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"      # dismisses the explainer, which then leaves the dev menu itself open
+      - tapOn: "Close"
+
+# Voice is the primary input; the composer is behind the keyboard affordance.
+- assertVisible: "Ramble"
+- tapOn: "Type a message"
+- tapOn: "Ask about your code, or steer the agent"
+- inputText: "Reply with exactly: mobile end to end works. Nothing else."
+- tapOn: "Send"   # Return inserts a newline on a multiline composer; the button sends
+
+# The relay echoes the committed turn back as user_echo — this alone proves the socket, the
+# access token, and session routing.
+- extendedWaitUntil:
+    visible: ".*mobile end to end works.*"
+    timeout: 20000
+
+# Then the agent answers. Assert on the *reply* rather than the "working…" indicator: a fast
+# turn can finish before any poll sees the transient state, which made this flaky.
+- extendedWaitUntil:
+    visible: "full reply.*"
+    timeout: 120000

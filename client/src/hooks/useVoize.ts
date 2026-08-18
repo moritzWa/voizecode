@@ -47,7 +47,11 @@ export const VOICES = [
   { id: "TX3LPaxmHKxFdv7VOQHJ", label: "Liam ♂" },
   { id: "SAz9YHcvj6GT2YYXdXww", label: "River ⚥" },
 ];
-export const DEFAULT_VOICE = VOICES[0].id;
+export const DEFAULT_VOICE = "JBFqnCBsd6RMkjVDRZzb"; // George ♂
+// The previous default. A stored preference beats the default, so without this anyone who never
+// opened the voice picker would stay on the old voice forever — treat "stored == old default" as
+// never having chosen. Keep in step with the mobile client.
+const LEGACY_DEFAULT_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah ♀
 
 export type Line = { kind: "user" | "agent" | "status" | "speech"; text: string; clip?: number; key?: string };
 export type SessionInfo = { sessionId: string; label: string; model: string };
@@ -144,7 +148,7 @@ export function useVoize() {
   useEffect(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem(VOICE_KEY) : null;
     // Migrate stale values (e.g. old OpenAI names) to a valid ElevenLabs voice.
-    const v = stored && VOICES.some((x) => x.id === stored) ? stored : DEFAULT_VOICE;
+    const v = stored && stored !== LEGACY_DEFAULT_VOICE && VOICES.some((x) => x.id === stored) ? stored : DEFAULT_VOICE;
     setVoiceState(v); voiceRef.current = v;
     const savedPref = (typeof window !== "undefined" && localStorage.getItem(MICPREF_KEY)) || "";
     setMicPrefState(savedPref); micPrefRef.current = savedPref;
