@@ -79,6 +79,39 @@ cp .env.example relay/.env    # add your API keys (DEEPGRAM_API_KEY, OPENAI_API_
 
 API keys live only in `relay/.env` (gitignored). See `.env.example` for all options.
 
+### Bring your own keys
+
+Speech is the only thing here that costs money, and it is billed to whoever owns the keys the
+relay uses. Running everything yourself, `relay/.env` is that, and there is nothing else to do.
+
+Against **someone else's relay** — the hosted one, or a friend's — put your keys on your laptop
+instead and the agent hands them over when it connects:
+
+```jsonc
+// ~/.voizecode/keys.json   (chmod 600; never committed)
+{
+  "deepgram":   "...",   // STT, and TTS if no ElevenLabs key
+  "openai":     "...",   // narration + fallback TTS
+  "elevenlabs": "...",   // TTS with word timings — this is what drives the reading highlight
+  "elVoice":    "...."   // optional: default voice id
+}
+```
+
+The relay holds them in memory for the life of the socket, uses them for that session only, and
+never writes them anywhere. Edit the file and restart `voize` to change them.
+
+Sending **any** key makes the whole session bring-your-own: the relay stops using its own keys for
+it entirely. That is deliberate — a half-filled config should bill you, not silently put your
+narration on the host's OpenAI account. Send no keys and you get the host's, which is what lets
+the hosted demo work without signing up for anything.
+
+**What the relay operator can see.** Not your code, and not your repo — the agent runs on your
+laptop and only sends the text of the conversation. But it does handle your speech and the
+assistant's replies in the clear, because it is the thing calling Deepgram and ElevenLabs, which
+cannot work on ciphertext. There is no end-to-end encryption here and there cannot be while the
+server does the transcription. If that matters for what you talk about, run your own relay:
+`cd relay && flyctl deploy --ha=false` and point `VOIZE_RELAY_URL` at it.
+
 ## Run (talk to your laptop in the browser)
 
 ```bash
@@ -111,6 +144,32 @@ First time: `cd electron && npm install`. If Electron's binary extracts incomple
 `@electron/get` issue with the framework symlinks), unzip the cached zip manually:
 `unzip -o ~/Library/Caches/electron/*/electron-*.zip -d node_modules/electron/dist && printf 'Electron.app/Contents/MacOS/Electron' > node_modules/electron/path.txt`.
 
+### iOS app (`mobile/`)
+
+A native second client — same relay, same protocol, no relay or agent changes. It exists for the
+one thing a browser can't do: keep audio *and* the mic alive with the phone locked and pocketed.
+(A WebView wrapper does not solve this; WKWebView-hosted pages get muted in the background.)
+
+Expo SDK 57 with a dev client, NativeWind for styling. `src/core/useVoize.ts` is a port of the web
+client's hook — read them side by side, the message handling is deliberately comparable.
+`src/audio/` swaps MediaSource + `<audio>` for `react-native-audio-api`, and getUserMedia +
+ScriptProcessor for its `AudioRecorder`.
+
+```bash
+cd mobile
+npx expo run:ios                        # first run: prebuild + pods, several minutes
+npm run fake-relay                      # protocol stub, no laptop agent or API keys needed
+npm run start:fake                      # Metro pointed at the stub (access code: testcode)
+```
+
+Signing in: copy the phone link on the Mac and paste it on the phone. `voizecode.com/?key=…` is
+registered as a universal link (`client/public/.well-known/apple-app-site-association`), so tapping
+it opens the app rather than Safari. Typing the code into the gate also works.
+
+Distribution is **TestFlight internal**, which needs no App Store review. `TODO.md` covers what an
+App Store submission would additionally require, and why the relay's single-tenancy blocks a
+public release.
+
 ## Deploy
 
 Both cloud tiers run on Fly.io — ONE always-on machine each (`relay/fly.toml`, `client/fly.toml`):
@@ -129,7 +188,10 @@ where BC works).
 
 Relay secrets (set with `flyctl secrets set`): `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`,
 `ELEVENLABS_API_KEY` (optional — presence selects ElevenLabs TTS), `CLIP_STORE=r2` + `R2_*` creds,
-`VOIZE_TOKEN` (pins the access code). The client bakes `NEXT_PUBLIC_RELAY_WS` in at **build
+`VOIZE_TOKEN` (pins the access code). These are the *fallback* keys, used only for agents that
+bring none of their own (see [Bring your own keys](#bring-your-own-keys)) — so anyone connecting
+without a config spends your credits. A relay with no keys at all still runs: typed text works,
+voice doesn't. The client bakes `NEXT_PUBLIC_RELAY_WS` in at **build
 time** (Dockerfile ARG), so changing the relay URL means rebuilding the client.
 
 ## Tests

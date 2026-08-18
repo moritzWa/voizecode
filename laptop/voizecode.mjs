@@ -30,10 +30,45 @@ const AUTH_TOKEN = (() => {
   return tok;
 })();
 const APP_URL = process.env.VOIZE_APP_URL || "http://localhost:3030";
+// Bring-your-own-keys. Speech costs money, so a self-hosted user runs on their own provider
+// accounts rather than the relay operator's. Keys live here, on the laptop, in
+// ~/.voizecode/keys.json — never in the repo and never persisted by the relay, which holds them
+// in memory for the life of the socket. Env vars win so CI and one-off runs can override.
+//
+//   { "deepgram": "...", "openai": "...", "elevenlabs": "...", "elVoice": "...", "ttsVoice": "..." }
+//
+// Sending any one key makes the whole session BYOK: the relay stops using its own keys for it, so
+// a partial config bills you rather than half-billing the host. Send none and you get the relay's
+// keys, which is what makes the hosted demo work with no signup.
+const KEYS_FILE = join(homedir(), ".voizecode", "keys.json");
+const PROVIDER_KEYS = (() => {
+  let file = {};
+  try { file = JSON.parse(readFileSync(KEYS_FILE, "utf8")); } catch { /* no file, or unreadable -> env only */ }
+  const pick = (envName, fileKey) => (process.env[envName] || file[fileKey] || "").trim();
+  const keys = {
+    deepgram: pick("DEEPGRAM_API_KEY", "deepgram"),
+    openai: pick("OPENAI_API_KEY", "openai"),
+    elevenlabs: pick("ELEVENLABS_API_KEY", "elevenlabs"),
+    elVoice: pick("VOIZE_EL_VOICE", "elVoice"),
+    elModel: pick("VOIZE_EL_MODEL", "elModel"),
+    ttsVoice: pick("VOIZE_TTS_VOICE", "ttsVoice"),
+  };
+  for (const k of Object.keys(keys)) if (!keys[k]) delete keys[k];
+  return keys;
+})();
+const HAS_OWN_KEYS = !!(PROVIDER_KEYS.deepgram || PROVIDER_KEYS.openai || PROVIDER_KEYS.elevenlabs);
+console.log(HAS_OWN_KEYS
+  ? `[voizecode] using your own keys (${["deepgram", "openai", "elevenlabs"].filter((k) => PROVIDER_KEYS[k]).join(", ")}) from ${KEYS_FILE}`
+  : `[voizecode] no keys in ${KEYS_FILE} — using the relay's (fine for the hosted demo; see README to bring your own)`);
+
 console.log(`[voizecode] access: ${APP_URL}/?key=${AUTH_TOKEN}`);
 const RECONNECT_CAP_MS = Number(process.env.VOIZE_RECONNECT_CAP_MS) || 15000;
+// How long a turn may produce absolutely no output before the chat reports itself stuck. Long
+// enough that a genuinely slow first token never trips it; short enough that you find out during
+// the same sitting rather than staring at a dead chat.
+const SILENT_TURN_MS = Number(process.env.VOIZE_SILENT_TURN_MS) || 90000;
 
-const claudeArgs = (m, resumeId) => [
+const claudeArgs = (m, resumeId, fork = false) => [
   "-p",
   "--input-format", "stream-json",
   "--output-format", "stream-json",
@@ -41,7 +76,10 @@ const claudeArgs = (m, resumeId) => [
   "--include-partial-messages",
   "--dangerously-skip-permissions",
   "--model", m,
-  ...(resumeId ? ["--resume", resumeId] : []),
+  // `--fork-session` branches a copy instead of re-attaching. Needed when respawning after a
+  // crash: Claude Code still considers the id live ("currently running as a background agent")
+  // and refuses a plain --resume, so the respawned chat died instantly with exit 0.
+  ...(resumeId ? ["--resume", resumeId, ...(fork ? ["--fork-session"] : [])] : []),
 ];
 
 // One self-contained chat: its own claude process (in `cwd`, optionally resuming a session)
@@ -61,14 +99,31 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   const send = (m) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ ...m, sessionId }));
   const announce = () => send({ t: "init", sessionId, model: isCodex ? "codex" : model, label, engine });
 
-  function startClaude() {
+  function startClaude(fork = false) {
     // VOIZE_NO_ANNOUNCE lets the user's Stop hook (done-announce.sh) skip the "finished" sound —
     // we already speak the reply, so the chime is redundant for voizecode sessions.
-    const child = spawn("claude", claudeArgs(model, resume), { stdio: ["pipe", "pipe", "inherit"], cwd, env: { ...process.env, VOIZE_NO_ANNOUNCE: "1" } });
+    const child = spawn("claude", claudeArgs(model, resume, fork), { stdio: ["pipe", "pipe", "inherit"], cwd, env: { ...process.env, VOIZE_NO_ANNOUNCE: "1" } });
     claude = child; buf = ""; turnText = ""; claudeReady = false; // ready flips on init (informational only — turns are written immediately, see flushTurns)
     console.log(`[${sessionId}] spawned claude (${model}${resume ? " resume " + resume.slice(0, 8) : ""}) in ${cwd}`);
     child.stdout.on("data", (d) => { if (child === claude) onStdout(d); });
-    child.on("exit", (c) => { if (child === claude) { console.log(`[${sessionId}] claude exited`, c); send({ t: "exit", code: c ?? 0 }); } });
+    child.on("exit", (c) => {
+      if (child !== claude) return; // a replaced process (model switch / fork) exiting is expected
+      console.log(`[${sessionId}] claude exited`, c);
+      send({ t: "exit", code: c ?? 0 });
+      // Drop the dead handle and bring the chat back. Without this `claude` still pointed at an
+      // exited process, so flushTurns() happily wrote every later turn into a closed pipe and the
+      // chat went permanently silent with no error anywhere — the "some chats just stop
+      // responding" bug. Resume keeps the conversation's context across the restart.
+      claude = null; claudeReady = false;
+      if (closed) return;
+      if (liveSessionId) resume = liveSessionId;
+      setTimeout(() => {
+        if (closed || claude) return;
+        console.log(`[${sessionId}] respawning claude after exit (forking ${String(resume).slice(0, 8)})`);
+        startClaude(true); // fork: the old id is still registered, a plain resume is refused
+        flushTurns(); // anything typed while it was down
+      }, 1000);
+    });
   }
   function switchModel(next) {
     if (next === model || !["haiku", "sonnet", "opus"].includes(next)) return;
@@ -169,13 +224,48 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   // since Claude Code ~2.1 the CLI emits `init` only AFTER the first stdin message, so waiting
   // for init before writing deadlocks the chat (the pre-2.1 behavior this queue guarded against
   // — pre-init stdin being dropped — is gone; the pipe buffers writes to a starting process).
-  const writeClaude = (text) =>
-    claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
+  // A turn that gets no reply used to look exactly like a slow one, forever. If claude produces
+  // nothing at all within this window, say so rather than leaving the chat mute — a wedged CLI
+  // (expired login, usage limit) is otherwise indistinguishable from the app being broken.
+  let busy = false;        // a turn is in flight (between stdin write and claude's `result`)
+  let expectAbort = false; // we caused the next error result ourselves, so don't report it
+  const interruptClaude = () =>
+    claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
+  let silenceTimer = null;
+  const clearSilence = () => { if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; } };
+  const armSilence = () => {
+    clearSilence();
+    silenceTimer = setTimeout(() => {
+      console.log(`[${sessionId}] no output ${SILENT_TURN_MS}ms after a turn — reporting stuck`);
+      send({ t: "tool_use", name: "stuck", summary: "claude hasn't responded — it may be wedged or logged out; try Clear chat, or check the laptop", speak: false });
+    }, SILENT_TURN_MS);
+  };
+
+  const writeClaude = (text) => {
+    if (!claude || claude.exitCode !== null) { // dead handle: restart rather than write into a closed pipe
+      console.log(`[${sessionId}] write with no live claude — starting one`);
+      claude = null; startClaude();
+    }
+    // A second turn written while one is still running makes Claude Code abort the in-flight turn
+    // with `is_error` / error_during_execution — which is exactly what a voice app produces all
+    // the time, because STT commits on pauses and one spoken thought arrives as two turns.
+    // Interrupt deliberately first: same end state (the new turn redirects the session, which is
+    // the intended behaviour) but a clean abort we are expecting rather than an error to report.
+    if (busy) {
+      console.log(`[${sessionId}] turn arrived mid-turn — interrupting before delivering`);
+      expectAbort = true;
+      interruptClaude();
+    }
+    busy = true;
+    armSilence();
+    return claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
+  };
   const flushTurns = () => { while (claude && turnQueue.length) writeClaude(turnQueue.shift()); };
   const pushTurn = isCodex ? codexTurn : (text) => { turnQueue.push(text); flushTurns(); };
   const interrupt = isCodex
     ? () => { try { codexProc?.kill("SIGINT"); } catch { /* gone */ } }
-    : () => claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
+    // A user-driven barge-in also produces an error result; it is expected, not worth reporting.
+    : () => { expectAbort = true; interruptClaude(); };
 
   function connect() {
     const sock = new WebSocket(RELAY_URL);
@@ -185,7 +275,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     sock.on("open", () => {
       retry = 0;
       console.log(`[${sessionId}] relay connected`);
-      send({ t: "hello", role: "agent", sessionId, label, token: AUTH_TOKEN });
+      send({ t: "hello", role: "agent", sessionId, label, token: AUTH_TOKEN, keys: PROVIDER_KEYS });
       announce();
       if (history && history.length) send({ t: "history", sessionId, messages: history }); // populate viewer on resume
       hbTimer = setInterval(() => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: "ping" })); }, 10000);
@@ -225,6 +315,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   }
 
   function onStdout(d) {
+    clearSilence(); // it is talking, so it is not stuck
     buf += d.toString();
     let i;
     while ((i = buf.indexOf("\n")) >= 0) {
@@ -250,8 +341,20 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
       let text = turnText.trim();
       // An error result has no streamed text -> the turn would end in dead silence. Surface it,
       // with a specific nudge for the common case (expired Claude Code login on the laptop).
+      busy = false;
+      if ((m.is_error || m.subtype !== "success") && expectAbort) {
+        // We interrupted this turn on purpose (barge-in, or a new turn arriving mid-turn).
+        expectAbort = false;
+        console.log(`[${sessionId}] turn aborted as expected (${m.subtype ?? "error"})`);
+        send({ t: "turn_end", fullText: text });
+        turnText = "";
+        return;
+      }
       if ((m.is_error || m.subtype !== "success") && !text) {
-        console.log(`[${sessionId}] error result:`, JSON.stringify(m).slice(0, 500));
+        // Log the fields that matter, not a truncated blob — subtype/result sit late in the JSON
+        // and were being cut off by the old slice(), which hid the actual cause.
+        console.log(`[${sessionId}] error result:`,
+          JSON.stringify({ subtype: m.subtype, result: m.result, error: m.error, stop_reason: m.stop_reason, num_turns: m.num_turns }));
         const raw = String(m.result || m.error || m.subtype || "");
         text = /login|log in|auth|credential|expired|oauth|api key/i.test(raw)
           ? "Claude Code login expired on the laptop — run claude /login there, then ask again."

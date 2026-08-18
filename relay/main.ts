@@ -8,19 +8,50 @@
 import { makeBlobStore } from "./storage.ts";
 
 const PORT = Number(Deno.env.get("VOIZE_RELAY_PORT") ?? 8787);
-const DEEPGRAM_KEY = Deno.env.get("DEEPGRAM_API_KEY") ?? "";
-const OPENAI_KEY = Deno.env.get("OPENAI_API_KEY") ?? "";
+const ENV_DEEPGRAM_KEY = Deno.env.get("DEEPGRAM_API_KEY") ?? "";
+const ENV_OPENAI_KEY = Deno.env.get("OPENAI_API_KEY") ?? "";
 const NARRATE_MODEL = Deno.env.get("VOIZE_NARRATE_MODEL") ?? "gpt-4.1-nano";
 const TTS_SPEED = Number(Deno.env.get("VOIZE_SPEED") ?? 1.8);
 const TTS_SR = 24000;
-const EL_KEY = Deno.env.get("ELEVENLABS_API_KEY") ?? "";
+const ENV_EL_KEY = Deno.env.get("ELEVENLABS_API_KEY") ?? "";
 const EL_VOICE = Deno.env.get("VOIZE_EL_VOICE") ?? "EXAVITQu4vr4xnSDxMaL"; // Sarah (premade)
 const EL_MODEL = Deno.env.get("VOIZE_EL_MODEL") ?? "eleven_flash_v2_5";
 // TTS provider: elevenlabs (per-word timestamps -> Speechify highlight) when its key is set,
 // else openai (streams mp3) , else deepgram. OpenAI is the fallback if the primary errors.
 // Speed is applied client-side (playbackRate, pitch-preserved); timestamps are in media-time so it stays synced.
-const TTS_PROVIDER = (Deno.env.get("VOIZE_TTS") ?? (EL_KEY ? "elevenlabs" : "openai")).toLowerCase();
+const TTS_PREF = Deno.env.get("VOIZE_TTS")?.toLowerCase() ?? "";
 const TTS_VOICE = Deno.env.get("VOIZE_TTS_VOICE") ?? "aura-2-thalia-en";
+
+// ---- bring-your-own-keys -------------------------------------------------------------------
+// Keys are resolved per session, not per process. A laptop that sends its own keys at hello runs
+// entirely on them; everyone else falls back to this relay's env keys (the hosted "just try it"
+// path, billed to whoever runs the relay). It is deliberately all-or-nothing per session: mixing
+// a user's ElevenLabs key with the host's OpenAI key would quietly put half the bill on the host.
+interface Keys { dg: string; openai: string; el: string; elVoice: string; elModel: string; ttsVoice: string; byok: boolean }
+const ENV_KEYS: Keys = {
+  dg: ENV_DEEPGRAM_KEY, openai: ENV_OPENAI_KEY, el: ENV_EL_KEY,
+  elVoice: EL_VOICE, elModel: EL_MODEL, ttsVoice: TTS_VOICE, byok: false,
+};
+function keysFromHello(k: Record<string, unknown> | undefined): Keys | null {
+  if (!k || typeof k !== "object") return null;
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const dg = str(k.deepgram), openai = str(k.openai), el = str(k.elevenlabs);
+  if (!dg && !openai && !el) return null; // nothing usable sent -> stay on the host's keys
+  return {
+    dg, openai, el,
+    elVoice: str(k.elVoice) || EL_VOICE,
+    elModel: str(k.elModel) || EL_MODEL,
+    ttsVoice: str(k.ttsVoice) || TTS_VOICE,
+    byok: true,
+  };
+}
+// Which TTS backend this session gets. VOIZE_TTS pins it for the host; otherwise it follows
+// whichever keys exist, preferring ElevenLabs because only it returns the word timings that drive
+// the reading highlight.
+function ttsProvider(k: Keys): string {
+  if (TTS_PREF && !k.byok) return TTS_PREF;
+  return k.el ? "elevenlabs" : k.openai ? "openai" : "deepgram";
+}
 const UTTER_GAP_MS = Number(Deno.env.get("VOIZE_UTTER_GAP_MS") ?? 2200);
 // When an utterance ends on a word/punctuation that implies more is coming (you paused
 // mid-thought), wait this much longer before committing — up to UTTER_MAX_EXT times — so the
@@ -44,6 +75,7 @@ interface Session {
   utterExt?: number;       // how many times delivery was deferred because the utterance looked unfinished
   hold?: boolean;          // ramble/dictation mode: accumulate speech across pauses, commit only on explicit flush
   lastToolSpeakAt: number; // throttle spoken tool-call updates
+  keys: Keys;              // BYOK: the agent's own provider keys, else the relay's env keys
 }
 const sessions = new Map<string, Session>();
 let client: WebSocket | null = null;
@@ -53,22 +85,40 @@ let client: WebSocket | null = null;
 const clipStore = makeBlobStore();
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 const b64ToBytes = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-// Access gate: ON automatically when deployed (Deno Deploy sets DENO_DEPLOYMENT_ID), or when
-// VOIZE_TOKEN/VOIZE_AUTH is set (pin a code, or force-enable for tests). OFF for plain local dev,
-// so localhost keeps working with no code. The required token is pinned from VOIZE_TOKEN, else
-// adopted from the first agent that connects (zero-config: the laptop generates + owns the code).
+// Access gate: ON automatically when deployed, or when VOIZE_TOKEN/VOIZE_AUTH is set (pin a code,
+// or force-enable for tests). OFF for plain local dev, so localhost keeps working with no code.
+// The required token is pinned from VOIZE_TOKEN, else adopted from the first agent that connects
+// (zero-config: the laptop generates + owns the code).
+// "Deployed" is per-host and easy to get wrong: DENO_DEPLOYMENT_ID alone was the check while this
+// lived on Deno Deploy, and Fly never sets it — so after the move the entire gate rested on the
+// VOIZE_TOKEN secret happening to exist, with no warning if it didn't.
 const PINNED_TOKEN = Deno.env.get("VOIZE_TOKEN") ?? "";
-const AUTH_ON = !!Deno.env.get("DENO_DEPLOYMENT_ID") || !!PINNED_TOKEN || Deno.env.get("VOIZE_AUTH") === "1";
+const DEPLOYED = !!Deno.env.get("DENO_DEPLOYMENT_ID") || !!Deno.env.get("FLY_APP_NAME");
+const AUTH_ON = DEPLOYED || !!PINNED_TOKEN || Deno.env.get("VOIZE_AUTH") === "1";
+// Fail closed. Deployed with no pinned code, the relay would adopt whichever agent connected
+// first — so after any restart it's a race for who owns the relay, and the winner gets our
+// Deepgram/OpenAI/ElevenLabs keys. Refuse to boot rather than serve that quietly.
+if (DEPLOYED && !PINNED_TOKEN) {
+  console.error("[relay] FATAL: deployed without VOIZE_TOKEN — refusing to start ungated.");
+  console.error("[relay] fix: flyctl secrets set VOIZE_TOKEN=<code> -a voizecode-relay");
+  Deno.exit(1);
+}
 let requiredToken: string = PINNED_TOKEN;
 let narration: "narrate" | "final-only" | "silent" = "narrate";
 // Selected TTS voice from the client. For ElevenLabs this is a voice ID (case-sensitive); for the
 // OpenAI fallback we coerce to a valid OpenAI voice. Empty -> provider default.
-let ttsVoice = Deno.env.get("VOIZE_VOICE") ?? "";
+// Voice is a *per-client* preference, not a global. It used to be one variable, so any client
+// connecting (a second phone, a simulator, a browser tab) overwrote it for everyone — you would
+// be mid-conversation in one voice and it would silently switch to whatever the other client had
+// stored. Keyed by socket, with the env default as the fallback.
+const DEFAULT_VOICE = Deno.env.get("VOIZE_VOICE") ?? "";
+const voiceByClient = new WeakMap<WebSocket, string>();
+const voiceFor = (sock: WebSocket | null) => (sock && voiceByClient.get(sock)) || DEFAULT_VOICE;
 const OPENAI_VOICES = new Set(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
 
 function getSession(id: string): Session {
   let s = sessions.get(id);
-  if (!s) { s = { id, label: id, model: "?", agent: null, dg: null, dgQueue: [], utter: "", lastToolSpeakAt: 0 }; sessions.set(id, s); }
+  if (!s) { s = { id, label: id, model: "?", agent: null, dg: null, dgQueue: [], utter: "", lastToolSpeakAt: 0, keys: ENV_KEYS }; sessions.set(id, s); }
   return s;
 }
 
@@ -156,11 +206,11 @@ function broadcastSessions() {
 // STT: per-session Deepgram streaming socket
 // ====================================================================
 function openDeepgram(s: Session) {
-  if (!DEEPGRAM_KEY || s.dg) return;
+  if (!s.keys.dg || s.dg) return;
   const url =
     "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1" +
     "&model=nova-2&interim_results=true&smart_format=true&endpointing=300&utterance_end_ms=1200";
-  const dg = new WebSocket(url, ["token", DEEPGRAM_KEY]);
+  const dg = new WebSocket(url, ["token", s.keys.dg]);
   s.dg = dg;
   dg.onopen = () => { console.log(`[relay:${s.id}] deepgram connected`); flushDg(s); };
   dg.onmessage = (e) => {
@@ -290,12 +340,26 @@ function b64(bytes: Uint8Array): string {
 // flushes mp3 progressively, so a long sentence starts playing before it's fully made.
 // Deepgram returns a whole mp3 (no progressive body) -> sent as one chunk. Both are mp3,
 // so the client plays via MediaSource and keeps pitch-preserved playbackRate.
-async function speak(s: Session, text: string) {
+// `readback` = the client asked us to read text that already exists in its transcript (a
+// restored turn, or a raw reply that was never narrated). Same synthesis path; the flag tells
+// the client to attach the audio to the line it already has rather than appending a duplicate.
+async function speak(s: Session, text: string, readback = false, to?: WebSocket) {
+  // `to` pins every message of this utterance to one socket. Live narration broadcasts to the
+  // active client (last-active-wins is intended there), but a readback was *requested* by a
+  // specific client and must come back to it. Without this the reply raced the client slot: the
+  // requester got the text and some other connected client got the audio.
+  const out = to
+    ? (m: Record<string, unknown>) => sendTo(to, { ...m, sessionId: s.id })
+    : (m: Record<string, unknown>) => toClient(s.id, m);
+  // Use the voice of the client that will actually hear this: the requester for a readback,
+  // otherwise the active client.
+  const ttsVoice = voiceFor(to ?? client);
+  const K = s.keys;
   if (!text.trim() || narration === "silent") return;
   const clip = nextSeq();
   const key = `${RUN_ID}-${clip}`; // stable handle the client keeps for replay
   const spoken = stripMarkdown(text); // TTS + word timings use the clean text; display keeps the markdown
-  toClient(s.id, { t: "speech_text", text, seq: nextSeq(), clip, key }); // clip ties the bubble to its audio (for highlight)
+  out({ t: "speech_text", text, seq: nextSeq(), clip, key, readback }); // clip ties the bubble to its audio (for highlight)
   const fmt = { encoding: "mp3" as const, sampleRate: TTS_SR };
   let any = false;
   const parts: Uint8Array[] = [];          // collected audio bytes, persisted on completion
@@ -306,14 +370,14 @@ async function speak(s: Session, text: string) {
     for (let o = 0; o < bytes.length; o += 24576) {
       const part = bytes.subarray(o, Math.min(o + 24576, bytes.length));
       any = true; parts.push(part);
-      toClient(s.id, { t: "audio_chunk", clip, b64: b64(part), seq: nextSeq(), format: fmt });
+      out({ t: "audio_chunk", clip, b64: b64(part), seq: nextSeq(), format: fmt });
     }
   };
 
   const streamOpenAI = async () => {
     const r = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
-      headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${K.openai}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: "tts-1", voice: OPENAI_VOICES.has(ttsVoice) ? ttsVoice : "alloy", input: spoken, response_format: "mp3" }),
     });
     if (!r.ok || !r.body) throw new Error(`openai tts ${r.status}`);
@@ -321,9 +385,9 @@ async function speak(s: Session, text: string) {
     while (true) { const { value, done } = await reader.read(); if (done) break; if (value) emit(value); }
   };
   const wholeDeepgram = async () => {
-    const r = await fetch(`https://api.deepgram.com/v1/speak?model=${TTS_VOICE}&encoding=mp3`, {
+    const r = await fetch(`https://api.deepgram.com/v1/speak?model=${K.ttsVoice}&encoding=mp3`, {
       method: "POST",
-      headers: { Authorization: `Token ${DEEPGRAM_KEY}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Token ${K.dg}`, "Content-Type": "application/json" },
       body: JSON.stringify({ text: spoken }),
     });
     if (!r.ok) throw new Error(`deepgram tts ${r.status}`);
@@ -331,31 +395,32 @@ async function speak(s: Session, text: string) {
   };
   // ElevenLabs with per-character timestamps -> derive word start times for Speechify-style highlight.
   const elevenLabs = async () => {
-    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ttsVoice || EL_VOICE}/with-timestamps?output_format=mp3_44100_128`, {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ttsVoice || K.elVoice}/with-timestamps?output_format=mp3_44100_128`, {
       method: "POST",
-      headers: { "xi-api-key": EL_KEY, "Content-Type": "application/json" },
-      body: JSON.stringify({ text: spoken, model_id: EL_MODEL }),
+      headers: { "xi-api-key": K.el, "Content-Type": "application/json" },
+      body: JSON.stringify({ text: spoken, model_id: K.elModel }),
     });
     if (!r.ok) throw new Error(`elevenlabs tts ${r.status}`);
     const j = await r.json();
     if (j.audio_base64) emit(b64ToBytes(j.audio_base64 as string));
     clipWords = j.alignment ? wordsFromAlignment(j.alignment) : [];
-    if (clipWords.length) toClient(s.id, { t: "words", clip, words: clipWords, seq: nextSeq() });
+    if (clipWords.length) out({ t: "words", clip, words: clipWords, seq: nextSeq() });
   };
 
-  const streamFirst = TTS_PROVIDER !== "deepgram" && TTS_PROVIDER !== "elevenlabs" && !!OPENAI_KEY;
+  const provider = ttsProvider(K);
+  const streamFirst = provider !== "deepgram" && provider !== "elevenlabs" && !!K.openai;
   try {
-    if (TTS_PROVIDER === "elevenlabs" && EL_KEY) await elevenLabs();
+    if (provider === "elevenlabs" && K.el) await elevenLabs();
     else if (streamFirst) await streamOpenAI();
-    else if (DEEPGRAM_KEY) await wholeDeepgram();
-    else if (OPENAI_KEY) await streamOpenAI();
+    else if (K.dg) await wholeDeepgram();
+    else if (K.openai) await streamOpenAI();
   } catch (e) {
-    console.log("[relay] tts failed, falling back to OpenAI:", (e as Error).message);
-    try { if (OPENAI_KEY) await streamOpenAI(); else if (DEEPGRAM_KEY) await wholeDeepgram(); }
+    console.log("[relay] tts failed, falling back:", (e as Error).message);
+    try { if (K.openai) await streamOpenAI(); else if (K.dg) await wholeDeepgram(); }
     catch (e2) { console.log("[relay] tts fallback failed:", (e2 as Error).message); }
   }
   if (any) {
-    toClient(s.id, { t: "audio_end", clip, seq: nextSeq() });
+    out({ t: "audio_end", clip, seq: nextSeq() });
     persistClip(key, parts, text, clipWords); // fire-and-forget; failure just means no replay
   }
 }
@@ -372,17 +437,34 @@ async function persistClip(key: string, parts: Uint8Array[], text: string, words
 }
 
 // Replay: read a persisted clip and send its audio + words to the client.
-async function serveClip(key: string) {
+// Who asked for the last list, per session. `sessions_list` and `prs` are *responses*: sending
+// them to the global client slot delivers them to whichever client happens to be active, so with
+// a phone and a laptop connected the requester's picker stays empty. Third time this bit us —
+// see also get_clip and readback audio.
+const listAsker = new Map<string, WebSocket>();
+const prsAsker = new Map<string, WebSocket>();
+const replyTo = (askers: Map<string, WebSocket>, sid: string, m: Record<string, unknown>) => {
+  const sock = askers.get(sid);
+  if (sock && sock.readyState === WebSocket.OPEN) { sendTo(sock, { ...m, sessionId: sid }); askers.delete(sid); return; }
+  toClient(sid, m); // no live asker (they reloaded) — fall back to the broadcast path
+};
+
+const sendTo = (sock: WebSocket, m: unknown) => {
+  try { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(m)); } catch { /* gone */ }
+};
+
+async function serveClip(key: string, to: WebSocket) {
   // Always reply (even with empty b64 when the clip isn't persisted) so a continuous replay
   // queue on the client can skip a missing clip instead of stalling on it.
   try {
     const mp3 = await clipStore.get(`${key}.mp3`);
     const metaRaw = mp3 ? await clipStore.get(`${key}.json`) : null;
     const meta = metaRaw ? JSON.parse(new TextDecoder().decode(metaRaw)) : { words: [] };
-    client?.send(JSON.stringify({ t: "clip_audio", key, b64: mp3 ? b64(mp3) : "", words: meta.words ?? [], format: { encoding: "mp3", sampleRate: TTS_SR } }));
+    sendTo(to, { t: "clip_audio", key, b64: mp3 ? b64(mp3) : "", words: meta.words ?? [], format: { encoding: "mp3", sampleRate: TTS_SR } });
+    if (!mp3) console.log(`[relay] clip ${key} not in store (never persisted or aged out)`);
   } catch (e) {
     console.log("[relay] clip serve failed", (e as Error).message);
-    client?.send(JSON.stringify({ t: "clip_audio", key, b64: "", words: [], format: { encoding: "mp3", sampleRate: TTS_SR } }));
+    sendTo(to, { t: "clip_audio", key, b64: "", words: [], format: { encoding: "mp3", sampleRate: TTS_SR } });
   }
 }
 
@@ -474,11 +556,11 @@ async function narrateFinal(s: Session, fullText: string) {
   // (a one-word reply came back as a multi-sentence lecture). Bypass it entirely unless the
   // reply is long or contains structure (code, tables, headings) that genuinely needs work.
   const needsAdaptation = fullText.length > 240 || /```|\n\|.*\||^#{1,3} |\n- |\n\d+\. /m.test(fullText);
-  if (!OPENAI_KEY || !needsAdaptation) { await speak(s, fullText); return; }
+  if (!s.keys.openai || !needsAdaptation) { await speak(s, fullText); return; }
   try {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${s.keys.openai}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: NARRATE_MODEL, max_tokens: 1200, stream: true, // higher cap: faithful adaptation can be longer than a summary
         messages: [{ role: "system", content: NARRATE_SYSTEM }, { role: "user", content: fullText.slice(0, 6000) }],
@@ -534,10 +616,10 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
       break;
     }
     case "turn_end": narrateFinal(s, (m.fullText as string) ?? ""); break;
-    case "sessions_list": toClient(s.id, { t: "sessions_list", sessions: m.sessions, projects: m.projects }); break;
+    case "sessions_list": replyTo(listAsker, s.id, { t: "sessions_list", sessions: m.sessions, projects: m.projects }); break;
     case "history": toClient(s.id, { t: "history", messages: m.messages }); break;
     case "meta": toClient(s.id, { t: "meta", claudeSessionId: m.claudeSessionId, cwd: m.cwd }); break;
-    case "prs": toClient(s.id, { t: "prs", prs: m.prs }); break;
+    case "prs": replyTo(prsAsker, s.id, { t: "prs", prs: m.prs }); break;
     case "exit":
       console.log(`[relay:${s.id}] agent exited`, m.code);
       // A dying claude (bad auth, crash) otherwise leaves the chat silently stuck on "working".
@@ -546,11 +628,28 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
   }
 }
 
-function handleClient(m: Record<string, unknown>) {
+function handleClient(m: Record<string, unknown>, from: WebSocket) {
   if (m.t === "hello") { replay(typeof m.since === "number" ? m.since : 0); broadcastSessions(); return; }
   if (m.t === "set_narration") { narration = m.mode as typeof narration; return; }
-  if (m.t === "set_voice") { ttsVoice = String(m.voice); console.log("[relay] voice ->", ttsVoice); return; }
-  if (m.t === "get_clip") { void serveClip(String(m.key)); return; }
+  if (m.t === "set_voice") { voiceByClient.set(from, String(m.voice)); console.log("[relay] voice ->", String(m.voice), "(this client only)"); return; }
+  // Reply to the socket that ASKED, not to the global client slot. Only one client holds
+  // that slot at a time, so with a phone and a laptop both connected a replay requested from
+  // one was delivered to the other — the requester just got silence, which looked like
+  // "tapping a line does nothing, sometimes".
+  if (m.t === "get_clip") { void serveClip(String(m.key), from); return; }
+  // Read existing transcript text aloud on demand. Turns restored from a resumed session were
+  // never narrated, so they have no stored clip to replay — synthesizing here is the only way to
+  // hear "what was the last message again?" on the way out of the door.
+  if (m.t === "speak") {
+    const sid2 = String(m.sessionId ?? "");
+    const sess = sessions.get(sid2);
+    const texts = Array.isArray(m.texts) ? (m.texts as unknown[]).map(String).filter((t) => t.trim()) : [];
+    if (!sess || !texts.length) return;
+    // Sequential on purpose: `speak` streams audio for one clip at a time, and the client plays
+    // clips in arrival order — synthesizing in parallel would interleave the chunks.
+    void (async () => { for (const t of texts.slice(0, 40)) await speak(sess, t, true, from); })();
+    return;
+  }
   // A session the local isolate doesn't hold may still live behind the bridge — create a local
   // shell for it (agent: null) so STT/turn delivery work here and toAgent() bridges the input.
   const sid = m.sessionId as string | undefined;
@@ -568,6 +667,14 @@ function handleClient(m: Record<string, unknown>) {
       if (s.hold) { console.log(`[relay:${s.id}] ramble ON (accumulating)`); }
       else {
         const t = s.utter.trim(); s.utter = ""; s.utterExt = 0;
+        // discard = the user changed their mind mid-ramble. Same teardown as a flush, minus the
+        // delivery: without this the only way out of ramble mode is to send what you said, which
+        // makes thinking out loud risky in exactly the mode meant for it.
+        if (m.discard) {
+          console.log(`[relay:${s.id}] ramble DISCARD -> dropped ${t.length} chars`);
+          toClient(s.id, { t: "utterance_discarded", sessionId: s.id });
+          break;
+        }
         console.log(`[relay:${s.id}] ramble OFF -> flush ${t.length} chars: "${t.slice(0, 60)}${t.length > 60 ? "…" : ""}"`);
         if (t) deliverUserTurn(s, t);
         else console.log(`[relay:${s.id}] ramble flush had EMPTY buffer (nothing transcribed?)`);
@@ -575,8 +682,8 @@ function handleClient(m: Record<string, unknown>) {
       break;
     case "new_session": toAgent(s, { t: "new_chat", cwd: m.cwd, resumeId: m.resumeId, label: m.label, engine: m.engine }); break;
     case "fork": toAgent(s, { t: "fork", userIndex: m.userIndex, text: m.text }); break;
-    case "list_sessions": toAgent(s, { t: "list_sessions" }); break;
-    case "list_prs": toAgent(s, { t: "list_prs", scope: m.scope }); break;
+    case "list_sessions": listAsker.set(s.id, from); toAgent(s, { t: "list_sessions" }); break;
+    case "list_prs": prsAsker.set(s.id, from); toAgent(s, { t: "list_prs", scope: m.scope }); break;
     case "close_session": // tell the agent to kill that chat, drop the session, remove the tab
       toAgent(s, { t: "close" });
       s.dg?.close();
@@ -640,12 +747,19 @@ Deno.serve(onDeploy ? {} : { port: PORT }, (req) => {
           console.log(`[relay] ⚠ agent ${session.id} REPLACED an existing live agent — duplicate stack? turns may have been lost`);
         }
         session.agent = socket;
-        console.log(`[relay] agent joined: ${session.id}`);
+        // BYOK: adopt this agent's keys for the session, or fall back to the host's. Re-read on
+        // every hello so a reconnect after the user edits ~/.voizecode/keys.json picks the new
+        // ones up, and so an agent that *stops* sending keys reverts rather than keeping stale
+        // credentials alive in memory.
+        session.keys = keysFromHello(m.keys as Record<string, unknown> | undefined) ?? ENV_KEYS;
+        // A key change has to reach Deepgram too: the STT socket is opened with the key baked in.
+        if (session.dg) { try { session.dg.close(); } catch { /* gone */ } session.dg = null; }
+        console.log(`[relay] agent joined: ${session.id} (keys: ${session.keys.byok ? "own" : "host"})`);
         broadcastSessions();
       } else { client = socket; console.log("[relay] client joined"); }
     }
     if (role === "agent" && session) handleAgent(session, m);
-    else if (role === "client") handleClient(m);
+    else if (role === "client") handleClient(m, socket);
   };
   socket.onclose = () => {
     if (role === "agent" && session?.agent === socket) { session.agent = null; session.dg?.close(); broadcastSessions(); }
@@ -654,4 +768,4 @@ Deno.serve(onDeploy ? {} : { port: PORT }, (req) => {
   };
   return response;
 });
-console.log(`[relay] listening on :${PORT}  (stt=${!!DEEPGRAM_KEY} tts=${TTS_PROVIDER}/${TTS_PROVIDER === "elevenlabs" ? EL_VOICE : TTS_VOICE} narrate=${OPENAI_KEY ? NARRATE_MODEL : "off"})`);
+console.log(`[relay] listening on :${PORT}  (host keys: stt=${!!ENV_DEEPGRAM_KEY} tts=${ENV_DEEPGRAM_KEY || ENV_OPENAI_KEY || ENV_EL_KEY ? ttsProvider(ENV_KEYS) : "none"} narrate=${ENV_OPENAI_KEY ? NARRATE_MODEL : "off"}; agents may bring their own)`);
