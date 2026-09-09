@@ -623,7 +623,12 @@ function handleAgent(s: Session, m: Record<string, unknown>) {
     case "exit":
       console.log(`[relay:${s.id}] agent exited`, m.code);
       // A dying claude (bad auth, crash) otherwise leaves the chat silently stuck on "working".
-      if (m.code) toClient(s.id, { t: "status", text: `claude exited (code ${m.code}) — check the laptop; if your login expired, run claude /login`, seq: nextSeq() });
+      // `detail` is claude's own last stderr line — far more actionable than the generic guess,
+      // which blamed an expired login for every non-zero exit, a live-session --resume refusal
+      // (the common one) included.
+      if (m.code) toClient(s.id, { t: "status", text: m.detail
+        ? `claude exited (code ${m.code}): ${m.detail}`
+        : `claude exited (code ${m.code}) — check the laptop; if your login expired, run claude /login`, seq: nextSeq() });
       break;
   }
 }
