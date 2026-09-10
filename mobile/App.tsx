@@ -3,7 +3,7 @@
 // different opinion. Read them side by side when changing either.
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
-  Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
+  ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -24,12 +24,25 @@ import "./global.css";
 // Agent replies are collapsed by default: the narrator lines below them are the reading surface,
 // and the raw reply is there for detail on demand. Without this the transcript shows every reply
 // twice — once in full, once narrated.
+// Tapping a line to hear it costs a round trip plus synthesis before a single sample arrives.
+// Without this the app looked like it had ignored the tap for a second or two, every time.
+function Preparing({ on }: { on?: boolean }) {
+  const p = usePalette();
+  if (!on) return null;
+  return (
+    <View className="mt-1 flex-row items-center gap-1.5">
+      <ActivityIndicator size="small" color={p.faint} />
+      <Text className="text-[11px] italic text-muted-foreground/70">preparing audio…</Text>
+    </View>
+  );
+}
+
 // memo, and `index` + a stable `onRead` rather than a fresh closure per render, because the
 // playback tick re-renders the screen ten times a second while audio plays. Without both, every
 // message in the transcript re-rendered on every tick — the whole reason a long resumed session
 // felt like treacle while the agent was talking, and went smooth again the moment it stopped.
-const AgentMessage = memo(function AgentMessage({ text, history, words, t, active, index, onRead }: {
-  text: string; history?: boolean; words?: SpokenWord[]; t?: number; active?: boolean;
+const AgentMessage = memo(function AgentMessage({ text, history, words, t, active, pending, index, onRead }: {
+  text: string; history?: boolean; words?: SpokenWord[]; t?: number; active?: boolean; pending?: boolean;
   index: number; onRead?: (i: number) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -43,6 +56,7 @@ const AgentMessage = memo(function AgentMessage({ text, history, words, t, activ
   if (history) return (
     <Pressable onPress={read} className={`rounded-2xl px-2.5 py-1.5 ${active ? "bg-read-line" : ""}`}>
       <RichText text={text} words={words} t={t} active={active} />
+      <Preparing on={pending} />
     </Pressable>
   );
   return (
@@ -61,6 +75,7 @@ const AgentMessage = memo(function AgentMessage({ text, history, words, t, activ
         // prose; see TODO.md if that stops being true.
         <Pressable onPress={read} className={`rounded-2xl px-1 py-0.5 ${active ? "bg-read-line" : ""}`}>
           <RichText text={text} words={words} t={t} active={active} />
+          <Preparing on={pending} />
         </Pressable>
       )}
     </View>
@@ -71,8 +86,8 @@ const AgentMessage = memo(function AgentMessage({ text, history, words, t, activ
 // re-renders the one line being spoken instead of every line in the transcript.
 const EMPTY_WORDS: SpokenWord[] = [];
 
-const SpeechRow = memo(function SpeechRow({ line, active, words, t, onReplay }: {
-  line: Line; active: boolean; words: SpokenWord[]; t: number; onReplay: (l: Line) => void;
+const SpeechRow = memo(function SpeechRow({ line, active, pending, words, t, onReplay }: {
+  line: Line; active: boolean; pending?: boolean; words: SpokenWord[]; t: number; onReplay: (l: Line) => void;
 }) {
   const replay = useCallback(() => { if (line.key) onReplay(line); }, [line, onReplay]);
   return (
@@ -83,6 +98,7 @@ const SpeechRow = memo(function SpeechRow({ line, active, words, t, onReplay }: 
       className={`rounded-2xl px-2.5 py-1.5 ${active ? "bg-read-line" : ""}`}
     >
       <SpokenLine words={words} t={t} text={line.text} />
+      <Preparing on={pending} />
     </Pressable>
   );
 });
@@ -383,6 +399,7 @@ function Main() {
                     key={i} text={l.text} history={l.history}
                     words={l.clip != null ? v.clipWords[l.clip] : undefined}
                     t={act ? v.speakingTime : 0} active={act}
+                    pending={v.pendingRead === i}
                     index={i} onRead={v.readFrom}
                   />
                 );
@@ -394,6 +411,7 @@ function Main() {
                 return (
                   <SpeechRow
                     key={i} line={l} active={active}
+                    pending={v.pendingRead === i}
                     words={active && words?.length ? words : EMPTY_WORDS}
                     t={active ? v.speakingTime : 0}
                     onReplay={v.replayClip}

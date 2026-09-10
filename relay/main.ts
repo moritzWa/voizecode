@@ -7,6 +7,7 @@
 
 import { makeBlobStore } from "./storage.ts";
 import { stripFences } from "../shared/markdown.ts";
+import { mapConcurrent, OrderedEmitter } from "../shared/ordered.ts";
 
 const PORT = Number(Deno.env.get("VOIZE_RELAY_PORT") ?? 8787);
 const ENV_DEEPGRAM_KEY = Deno.env.get("DEEPGRAM_API_KEY") ?? "";
@@ -63,6 +64,10 @@ const UTTER_MAX_EXT = Number(Deno.env.get("VOIZE_UTTER_MAX_EXT") ?? 3);
 // meaningful action each turn always speaks. Which tools are "meaningful" is decided
 // by the laptop (it has the full command) and arrives as the `speak` flag.
 const TOOL_SPEAK_THROTTLE_MS = Number(Deno.env.get("VOIZE_TOOL_SPEAK_THROTTLE_MS") ?? 6000);
+// How many utterances may be synthesized ahead of the one currently being delivered. Output is
+// still strictly ordered; this only decides how much work runs early. Above ~3 the extra clips
+// are finished long before anyone hears them, and each one is a paid TTS request.
+const SPEAK_LOOKAHEAD = Number(Deno.env.get("VOIZE_SPEAK_LOOKAHEAD") ?? 3);
 
 interface Session {
   id: string;
@@ -349,14 +354,19 @@ function b64(bytes: Uint8Array): string {
 // `readback` = the client asked us to read text that already exists in its transcript (a
 // restored turn, or a raw reply that was never narrated). Same synthesis path; the flag tells
 // the client to attach the audio to the line it already has rather than appending a duplicate.
-async function speak(s: Session, text: string, readback = false, to?: WebSocket) {
+async function speak(s: Session, text: string, readback = false, to?: WebSocket, order?: { slot: number; emitter: OrderedEmitter }) {
   // `to` pins every message of this utterance to one socket. Live narration broadcasts to the
   // active client (last-active-wins is intended there), but a readback was *requested* by a
   // specific client and must come back to it. Without this the reply raced the client slot: the
   // requester got the text and some other connected client got the audio.
-  const out = to
-    ? (m: Record<string, unknown>) => sendTo(to, { ...m, sessionId: s.id })
-    : (m: Record<string, unknown>) => toClient(s.id, m);
+  //
+  // seq is stamped HERE, where a message actually goes out, not where it is composed. With
+  // `order` set this utterance may be synthesized ahead of its turn and held back, and seq has to
+  // be monotonic on the wire or a reconnecting client's replay skips whatever was buffered.
+  const write = to
+    ? (m: Record<string, unknown>) => sendTo(to, { ...m, sessionId: s.id, seq: nextSeq() })
+    : (m: Record<string, unknown>) => toClient(s.id, { ...m, seq: nextSeq() });
+  const out = order ? (m: Record<string, unknown>) => order.emitter.push(order.slot, m) : write;
   // Use the voice of the client that will actually hear this: the requester for a readback,
   // otherwise the active client.
   const ttsVoice = voiceFor(to ?? client);
@@ -365,7 +375,7 @@ async function speak(s: Session, text: string, readback = false, to?: WebSocket)
   const clip = nextSeq();
   const key = `${RUN_ID}-${clip}`; // stable handle the client keeps for replay
   const spoken = stripMarkdown(text); // TTS + word timings use the clean text; display keeps the markdown
-  out({ t: "speech_text", text, seq: nextSeq(), clip, key, readback }); // clip ties the bubble to its audio (for highlight)
+  out({ t: "speech_text", text, clip, key, readback }); // clip ties the bubble to its audio (for highlight)
   const fmt = { encoding: "mp3" as const, sampleRate: TTS_SR };
   let any = false;
   const parts: Uint8Array[] = [];          // collected audio bytes, persisted on completion
@@ -376,7 +386,7 @@ async function speak(s: Session, text: string, readback = false, to?: WebSocket)
     for (let o = 0; o < bytes.length; o += 24576) {
       const part = bytes.subarray(o, Math.min(o + 24576, bytes.length));
       any = true; parts.push(part);
-      out({ t: "audio_chunk", clip, b64: b64(part), seq: nextSeq(), format: fmt });
+      out({ t: "audio_chunk", clip, b64: b64(part), format: fmt });
     }
   };
 
@@ -410,7 +420,7 @@ async function speak(s: Session, text: string, readback = false, to?: WebSocket)
     const j = await r.json();
     if (j.audio_base64) emit(b64ToBytes(j.audio_base64 as string));
     clipWords = j.alignment ? wordsFromAlignment(j.alignment) : [];
-    if (clipWords.length) out({ t: "words", clip, words: clipWords, seq: nextSeq() });
+    if (clipWords.length) out({ t: "words", clip, words: clipWords });
   };
 
   const provider = ttsProvider(K);
@@ -426,9 +436,12 @@ async function speak(s: Session, text: string, readback = false, to?: WebSocket)
     catch (e2) { console.log("[relay] tts fallback failed:", (e2 as Error).message); }
   }
   if (any) {
-    out({ t: "audio_end", clip, seq: nextSeq() });
+    out({ t: "audio_end", clip });
     persistClip(key, parts, text, clipWords); // fire-and-forget; failure just means no replay
   }
+  // Release the slot even when synthesis produced nothing: one silent sentence must not strand
+  // every later one behind it.
+  order?.emitter.finish(order.slot);
 }
 
 // Save a finished clip's audio + word timings so any client can replay it later by key.
@@ -573,6 +586,20 @@ async function narrateFinal(s: Session, fullText: string) {
       }),
     });
     if (!r.ok || !r.body) { console.log("[relay] narrate error", r.status); await speak(s, fullText); return; }
+    // Same lookahead as the readback path. The narrator emits sentences faster than TTS can speak
+    // them, so awaiting each one in turn left the synthesizer idle between sentences and made the
+    // gap before audio grow with the length of the reply.
+    const emitter = new OrderedEmitter((msg) => toClient(s.id, { ...msg, seq: nextSeq() }));
+    let slot = 0;
+    const inFlight: Promise<void>[] = [];
+    const say = (t: string) => {
+      const mine = slot++;
+      const p = speak(s, t, false, undefined, { slot: mine, emitter });
+      inFlight.push(p);
+      // Bound the lookahead: without this a fast narrator would start every sentence at once and
+      // fire off a dozen concurrent TTS requests.
+      return inFlight.length >= SPEAK_LOOKAHEAD ? inFlight.shift()! : Promise.resolve();
+    };
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let sse = "", spoken = "", any = false;
@@ -591,10 +618,11 @@ async function narrateFinal(s: Session, fullText: string) {
         spoken += tok;
         const { done: sentences, rest } = takeSentences(spoken);
         spoken = rest;
-        for (const sent of sentences) { any = true; await speak(s, sent); }
+        for (const sent of sentences) { any = true; await say(sent); }
       }
     }
-    if (spoken.trim()) { any = true; await speak(s, spoken.trim()); }
+    if (spoken.trim()) { any = true; await say(spoken.trim()); }
+    await Promise.all(inFlight); // drain the lookahead before deciding nothing was said
     if (!any) await speak(s, fullText);
   } catch (e) { console.log("[relay] narrate failed", (e as Error).message); await speak(s, fullText); }
 }
@@ -651,9 +679,15 @@ function handleClient(m: Record<string, unknown>, from: WebSocket) {
     const sess = sessions.get(sid2);
     const texts = Array.isArray(m.texts) ? (m.texts as unknown[]).map(String).filter((t) => t.trim()) : [];
     if (!sess || !texts.length) return;
-    // Sequential on purpose: `speak` streams audio for one clip at a time, and the client plays
-    // clips in arrival order — synthesizing in parallel would interleave the chunks.
-    void (async () => { for (const t of texts.slice(0, 40)) await speak(sess, t, true, from); })();
+    // Synthesized with lookahead, delivered in order. This used to be a plain sequential await,
+    // so sentence 2 was not even started until sentence 1 had finished streaming — and the client
+    // buffers each clip whole before it can decode it, so the gaps compounded over a long
+    // readback. OrderedEmitter holds a slot's output until every earlier slot has gone out, which
+    // is what the client needs (it plays clips in arrival order); slot 0 still streams the moment
+    // it has bytes, because nothing is in front of it.
+    const list = texts.slice(0, 40);
+    const emitter = new OrderedEmitter((msg) => sendTo(from, { ...msg, sessionId: sess.id, seq: nextSeq() }));
+    void mapConcurrent(list, SPEAK_LOOKAHEAD, (t, i) => speak(sess, t, true, from, { slot: i, emitter }));
     return;
   }
   // A session the local isolate doesn't hold may still live behind the bridge — create a local
