@@ -9,8 +9,8 @@
 // The cost is that this is no longer true inline text layout: no justification or hyphenation,
 // and the gap between words is padding rather than a real space. At sentence length that is
 // invisible, and the highlight is the whole point of this component.
-import { useEffect, useMemo } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { memo, useEffect, useMemo } from "react";
+import { ScrollView, Text, View, type ViewStyle } from "react-native";
 import Animated, { interpolateColor, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import type { SpokenWord } from "@shared/protocol";
 import { splitBlocks, styledWords, type StyledWord } from "@shared/markdown";
@@ -24,6 +24,37 @@ import { usePalette, type Palette } from "./theme";
 // checkable if one test can count both (test/markdown.mjs).
 
 const HIGHLIGHT_MS = 130; // long enough to read as a glide, short enough to stay on the beat
+
+// Geometry is shared by both word renderers and must stay identical between them: a word that
+// changed size when its line started being read would re-wrap the paragraph under the highlight.
+const wordBox = (w: StyledWord) => ({
+  borderRadius: 6,
+  // The inter-word gap is padding only, sized to about the width of a real space (~4px), or the
+  // paragraph reads as oddly justified.
+  paddingHorizontal: w.code ? 5 : 2,
+  paddingVertical: 2,
+  marginVertical: 1,
+});
+const wordText = (w: StyledWord, p: Palette) => ({
+  color: w.code ? p.codeFg : p.foreground,
+  fontSize: w.code ? 13 : 14.5,
+  lineHeight: 20,
+  fontWeight: (w.bold ? "600" : "400") as "600" | "400",
+  fontFamily: w.code ? "Menlo" : undefined,
+});
+
+// The overwhelming majority of words on screen can never light up: everything outside the one line
+// currently being spoken. They used to be Animated.Views anyway, each with its own shared value
+// and animated style, which is thousands of Reanimated nodes for a resumed transcript — mounted,
+// and reconciled again on every playback tick. This is the plain version for those: no hooks, no
+// animation, same box.
+const StaticWord = memo(function StaticWord({ w, p }: { w: StyledWord; p: Palette }) {
+  return (
+    <View style={[wordBox(w), { backgroundColor: w.code ? p.codeBg : p.readWordOff }]}>
+      <Text style={wordText(w, p)}>{w.text}</Text>
+    </View>
+  );
+});
 
 function Word({ w, isActive, p }: { w: StyledWord; isActive: boolean; p: Palette }) {
   // The highlight cross-fades rather than snapping, so it reads as travelling along the line:
@@ -43,29 +74,26 @@ function Word({ w, isActive, p }: { w: StyledWord; isActive: boolean; p: Palette
       // load-bearing: the moment the highlight changes a size, the line re-wraps and words
       // visibly jump as they are read. The web client avoids this the same way (`px-1` is keyed
       // off `w.code`; the active state only swaps `bg-*`).
-      // The inter-word gap is padding only, sized to about the width of a real space (~4px),
-      // or the paragraph reads as oddly justified.
-      style={[{
-        borderRadius: 6,
-        paddingHorizontal: w.code ? 5 : 2,
-        paddingVertical: 2,
-        marginVertical: 1,
-      }, animated]}
+      style={[wordBox(w), animated]}
     >
-      <Text
-        style={{
-          color: w.code ? p.codeFg : p.foreground,
-          fontSize: w.code ? 13 : 14.5,
-          lineHeight: 20,
-          fontWeight: w.bold ? "600" : "400",
-          fontFamily: w.code ? "Menlo" : undefined,
-        }}
-      >
-        {w.text}
-      </Text>
+      <Text style={wordText(w, p)}>{w.text}</Text>
     </Animated.View>
   );
 }
+
+// One paragraph of words. Split out and memoized so a playback tick re-renders only the paragraph
+// whose highlight actually moved: `cursor` is -1 for every inactive line, so the memo holds.
+const WordRow = memo(function WordRow({ sw, base, cursor, p, animated, style }: {
+  sw: StyledWord[]; base: number; cursor: number; p: Palette; animated: boolean; style?: ViewStyle;
+}) {
+  return (
+    <View className="flex-row flex-wrap items-center" style={style}>
+      {sw.map((w, j) => (animated
+        ? <Word key={j} w={w} isActive={base + j === cursor} p={p} />
+        : <StaticWord key={j} w={w} p={p} />))}
+    </View>
+  );
+});
 
 // A fenced block, laid out as real preformatted text: one <Text> that keeps its own newlines, in
 // a horizontal scroller. Scrolling sideways rather than wrapping is the whole point — an ASCII
@@ -89,25 +117,24 @@ function CodeBlock({ text, p }: { text: string; p: Palette }) {
   );
 }
 
-export function SpokenLine({ words, t, text }: { words: SpokenWord[]; t: number; text: string }) {
+export const SpokenLine = memo(function SpokenLine({ words, t, text }: { words: SpokenWord[]; t: number; text: string }) {
   const p = usePalette();
   const sw = useMemo(() => styledWords(text), [text]);
   // Words arrive in order, so the spoken one is the last whose start time has passed.
   let active = -1;
   for (let i = 0; i < words.length; i++) { if (words[i].start <= t) active = i; else break; }
 
-  return (
-    <View className="flex-row flex-wrap items-center">
-      {sw.map((w, i) => <Word key={i} w={w} isActive={i === active} p={p} />)}
-    </View>
-  );
-}
+  // `words` is empty for every line that is not being spoken, and the caller passes t=0 there, so
+  // those lines take the static path — no shared values, and the memo above stops them re-rendering
+  // ten times a second while some other line is read.
+  return <WordRow sw={sw} base={0} cursor={active} p={p} animated={words.length > 0} />;
+});
 
 // Static rich text for turns that were never narrated — a resumed session's transcript arrives as
 // plain assistant text with no `speech` lines, so there is nothing to highlight and nothing to
 // collapse behind. Reuses the same word renderer so `**bold**` and `code` look identical to a
 // spoken line, and keeps paragraph breaks, which splitting on whitespace alone would destroy.
-export function RichText({ text, words = [], t = 0, active = false }: {
+export const RichText = memo(function RichText({ text, words = [], t = 0, active = false }: {
   text: string; words?: SpokenWord[]; t?: number; active?: boolean;
 }) {
   const p = usePalette();
@@ -129,11 +156,15 @@ export function RichText({ text, words = [], t = 0, active = false }: {
         const sw = styledWords(part.text);
         const base = seen; seen += sw.length;
         return (
-          <View key={i} className="flex-row flex-wrap items-center" style={{ marginBottom: i < parts.length - 1 ? 10 : 0 }}>
-            {sw.map((w, j) => <Word key={j} w={w} isActive={base + j === cursor} p={p} />)}
-          </View>
+          <WordRow
+            key={i} sw={sw} base={base} cursor={cursor} p={p}
+            // Only a line actually being read aloud needs animated words. A restored transcript is
+            // hundreds of these rows; giving every word a shared value was most of the mount cost.
+            animated={active}
+            style={{ marginBottom: i < parts.length - 1 ? 10 : 0 }}
+          />
         );
       })}
     </View>
   );
-}
+});

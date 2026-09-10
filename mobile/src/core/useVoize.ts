@@ -351,12 +351,21 @@ export function useVoize() {
         case "history": {
           const lines: Line[] = (m.messages || []).map((mm: { role: string; text: string }) =>
             ({ kind: mm.role === "user" ? "user" : "agent", text: mm.text, history: true }));
-          // Only fill an EMPTY transcript. A resumed session's history is plain user/assistant
-          // turns — it has no narrated `speech` lines and no clip keys, so applying it over a
-          // transcript we already have replaces every spoken line with the raw reply and makes
-          // past lines unplayable. That is what happened after an app restart: the persisted
-          // transcript was clobbered by history arriving on reconnect.
-          setConvos((p) => (p[sid]?.length ? p : { ...p, [sid]: lines }));
+          // Only fill a transcript with no CONVERSATION in it yet. A resumed session's history is
+          // plain user/assistant turns — it has no narrated `speech` lines and no clip keys, so
+          // applying it over a transcript we already have replaces every spoken line with the raw
+          // reply and makes past lines unplayable. That is what happened after an app restart: the
+          // persisted transcript was clobbered by history arriving on reconnect.
+          //
+          // `status` lines do not count as conversation. They arrive from the relay the moment
+          // anything goes wrong — and a failed resume emits one ("claude exited (code 1) …")
+          // before the history lands, which is precisely when you most want the history. Counting
+          // it made the guard eat the whole transcript and leave a chat you cannot scroll up in,
+          // showing one error and nothing else.
+          // Any status lines already shown stay, after the history: they are newer than it, and an
+          // error worth printing is still worth reading once the transcript is there.
+          const isConvo = (l: Line) => l.kind !== "status";
+          setConvos((p) => (p[sid]?.some(isConvo) ? p : { ...p, [sid]: [...lines, ...(p[sid] ?? [])] }));
           break;
         }
         case "transcript":

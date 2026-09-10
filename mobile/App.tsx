@@ -1,7 +1,7 @@
 // Native port of the web client's index.tsx. Structure, control layout and wording follow it
 // closely on purpose — this is the same app on a different screen, not a companion with a
 // different opinion. Read them side by side when changing either.
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
@@ -24,18 +24,24 @@ import "./global.css";
 // Agent replies are collapsed by default: the narrator lines below them are the reading surface,
 // and the raw reply is there for detail on demand. Without this the transcript shows every reply
 // twice — once in full, once narrated.
-function AgentMessage({ text, history, words, t, active, onRead }: {
-  text: string; history?: boolean; words?: SpokenWord[]; t?: number; active?: boolean; onRead?: () => void;
+// memo, and `index` + a stable `onRead` rather than a fresh closure per render, because the
+// playback tick re-renders the screen ten times a second while audio plays. Without both, every
+// message in the transcript re-rendered on every tick — the whole reason a long resumed session
+// felt like treacle while the agent was talking, and went smooth again the moment it stopped.
+const AgentMessage = memo(function AgentMessage({ text, history, words, t, active, index, onRead }: {
+  text: string; history?: boolean; words?: SpokenWord[]; t?: number; active?: boolean;
+  index: number; onRead?: (i: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const p = usePalette();
+  const read = useCallback(() => onRead?.(index), [onRead, index]);
   const preview = text.length > 60 ? text.slice(0, 60).replace(/\s+\S*$/, "") + "…" : text;
   // A restored turn has no narrated lines under it, so the disclosure would hide the whole
   // answer behind a chevron. Show it outright, rendered rather than as raw markdown.
   // Tapping reads it aloud: these turns were never narrated, so there is no stored clip — the
   // relay synthesizes on demand. Highlighting then works exactly as it does for a spoken line.
   if (history) return (
-    <Pressable onPress={onRead} className={`rounded-2xl px-2.5 py-1.5 ${active ? "bg-read-line" : ""}`}>
+    <Pressable onPress={read} className={`rounded-2xl px-2.5 py-1.5 ${active ? "bg-read-line" : ""}`}>
       <RichText text={text} words={words} t={t} active={active} />
     </Pressable>
   );
@@ -53,13 +59,33 @@ function AgentMessage({ text, history, words, t, active, onRead }: {
         // Light markdown only (**bold**, `code`) via the shared word renderer — no block-level
         // markdown (lists, headings, fenced blocks) is parsed. Enough for a reply that is mostly
         // prose; see TODO.md if that stops being true.
-        <Pressable onPress={onRead} className={`rounded-2xl px-1 py-0.5 ${active ? "bg-read-line" : ""}`}>
+        <Pressable onPress={read} className={`rounded-2xl px-1 py-0.5 ${active ? "bg-read-line" : ""}`}>
           <RichText text={text} words={words} t={t} active={active} />
         </Pressable>
       )}
     </View>
   );
-}
+});
+
+// Same reasoning as AgentMessage: memoized, with a stable onReplay, so a playback tick only
+// re-renders the one line being spoken instead of every line in the transcript.
+const EMPTY_WORDS: SpokenWord[] = [];
+
+const SpeechRow = memo(function SpeechRow({ line, active, words, t, onReplay }: {
+  line: Line; active: boolean; words: SpokenWord[]; t: number; onReplay: (l: Line) => void;
+}) {
+  const replay = useCallback(() => { if (line.key) onReplay(line); }, [line, onReplay]);
+  return (
+    <Pressable
+      onPress={replay}
+      // The line being read gets a soft rounded wash so you can find your place at a glance; the
+      // word inside it gets the stronger one (see SpokenLine).
+      className={`rounded-2xl px-2.5 py-1.5 ${active ? "bg-read-line" : ""}`}
+    >
+      <SpokenLine words={words} t={t} text={line.text} />
+    </Pressable>
+  );
+});
 
 function Btn({
   label, icon, onPress, variant = "outline", flex, size = "md",
@@ -357,7 +383,7 @@ function Main() {
                     key={i} text={l.text} history={l.history}
                     words={l.clip != null ? v.clipWords[l.clip] : undefined}
                     t={act ? v.speakingTime : 0} active={act}
-                    onRead={() => v.readFrom(i)}
+                    index={i} onRead={v.readFrom}
                   />
                 );
               }
@@ -366,19 +392,12 @@ function Main() {
                 const active = l.clip != null && l.clip === v.speakingClip;
                 const words = l.clip != null ? v.clipWords[l.clip] : undefined;
                 return (
-                  <Pressable
-                    key={i}
-                    onPress={() => l.key && v.replayClip(l)}
-                    // The line being read gets a soft rounded wash so you can find your place at
-                    // a glance; the word inside it gets the stronger one (see SpokenLine).
-                    className={`rounded-2xl px-2.5 py-1.5 ${active ? "bg-read-line" : ""}`}
-                  >
-                    <SpokenLine
-                      words={active && words?.length ? words : []}
-                      t={active ? v.speakingTime : 0}
-                      text={l.text}
-                    />
-                  </Pressable>
+                  <SpeechRow
+                    key={i} line={l} active={active}
+                    words={active && words?.length ? words : EMPTY_WORDS}
+                    t={active ? v.speakingTime : 0}
+                    onReplay={v.replayClip}
+                  />
                 );
               }
 
