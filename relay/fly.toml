@@ -3,6 +3,13 @@
 app = "voizecode-relay"
 primary_region = "sjc"
 
+# Deploy from the repo root: `flyctl deploy --config relay/fly.toml .`
+# main.ts imports ../shared/*.ts, so the build context has to include shared/ as well as relay/.
+# The path is relative to THIS file, not to the build context — "relay/Dockerfile" resolves to
+# relay/relay/Dockerfile and fails.
+[build]
+  dockerfile = "Dockerfile"
+
 [http_service]
   internal_port = 8787
   force_https = true
