@@ -60,7 +60,7 @@ export type AgentToRelay =
   | { t: "delta"; text: string }                   // claude assistant text delta
   | { t: "tool_use"; name: string; summary: string; speak: boolean } // tool call started; speak=worth voicing
   | { t: "turn_end"; fullText: string }            // assistant turn finished; fullText = whole reply
-  | { t: "exit"; code: number }
+  | { t: "exit"; code: number; detail?: string }
   | { t: "meta"; claudeSessionId: string; cwd: string }                      // claude session uuid + cwd (debug)
   | { t: "sessions_list"; sessions: SavedSession[]; projects: ProjectInfo[] } // past sessions + project dirs
   | { t: "prs"; prs: PullRequest[] }                                         // authored PRs in the chat's repo
