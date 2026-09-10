@@ -7,7 +7,7 @@
 //   client (mic) -> relay (STT) --user_message--> chat --> claude stdin
 //   claude stdout --delta/tool_use/turn_end--> chat --> relay (narrate+TTS) -> client
 
-import { spawn, execFile } from "node:child_process";
+import { spawn, execFile, execFileSync } from "node:child_process";
 import process from "node:process";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
@@ -68,6 +68,23 @@ const RECONNECT_CAP_MS = Number(process.env.VOIZE_RECONNECT_CAP_MS) || 15000;
 // the same sitting rather than staring at a dead chat.
 const SILENT_TURN_MS = Number(process.env.VOIZE_SILENT_TURN_MS) || 90000;
 
+// Session ids that are currently running as `claude` agents. Resuming one of these with a plain
+// `--resume` is refused (exit 1) — and the sessions list is sorted most-recently-active first, so
+// the entries you actually want to pick up from your phone are exactly the ones most likely to be
+// live. Checking up front lets the first spawn fork straight away instead of dying and retrying.
+// Cached briefly: one `claude agents --json` costs ~120ms and a chat can spawn several times.
+let liveIdsCache = { at: 0, ids: new Set() };
+function liveSessionIds() {
+  if (Date.now() - liveIdsCache.at < 3000) return liveIdsCache.ids;
+  let ids = new Set();
+  try {
+    for (const a of JSON.parse(execFileSync("claude", ["agents", "--json"], { timeout: 5000, encoding: "utf8" })))
+      if (a?.sessionId) ids.add(a.sessionId);
+  } catch { /* claude missing or output changed: fall back to the exit-1 retry path */ }
+  liveIdsCache = { at: Date.now(), ids };
+  return ids;
+}
+
 const claudeArgs = (m, resumeId, fork = false) => [
   "-p",
   "--input-format", "stream-json",
@@ -102,14 +119,30 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   function startClaude(fork = false) {
     // VOIZE_NO_ANNOUNCE lets the user's Stop hook (done-announce.sh) skip the "finished" sound —
     // we already speak the reply, so the chime is redundant for voizecode sessions.
-    const child = spawn("claude", claudeArgs(model, resume, fork), { stdio: ["pipe", "pipe", "inherit"], cwd, env: { ...process.env, VOIZE_NO_ANNOUNCE: "1" } });
+    // A live background session refuses a plain --resume, so fork from the start rather than
+    // spending a doomed spawn (~3s of dead air) on discovering it.
+    if (resume && !fork && liveSessionIds().has(resume)) {
+      console.log(`[${sessionId}] ${resume.slice(0, 8)} is a live background session — forking instead of resuming`);
+      fork = true;
+    }
+    const child = spawn("claude", claudeArgs(model, resume, fork), { stdio: ["pipe", "pipe", "pipe"], cwd, env: { ...process.env, VOIZE_NO_ANNOUNCE: "1" } });
     claude = child; buf = ""; turnText = ""; claudeReady = false; // ready flips on init (informational only — turns are written immediately, see flushTurns)
-    console.log(`[${sessionId}] spawned claude (${model}${resume ? " resume " + resume.slice(0, 8) : ""}) in ${cwd}`);
+    console.log(`[${sessionId}] spawned claude (${model}${resume ? ` ${fork ? "fork" : "resume"} ` + resume.slice(0, 8) : ""}) in ${cwd}`);
     child.stdout.on("data", (d) => { if (child === claude) onStdout(d); });
+    // Was `inherit`: claude's reason for dying went to the laptop terminal and the phone only ever
+    // saw "exited (code 1)". Keep the tail so the exit we report can say what actually happened.
+    let stderrTail = "";
+    child.stderr.on("data", (d) => { stderrTail = (stderrTail + d.toString()).slice(-1000); process.stderr.write(d); });
     child.on("exit", (c) => {
       if (child !== claude) return; // a replaced process (model switch / fork) exiting is expected
       console.log(`[${sessionId}] claude exited`, c);
-      send({ t: "exit", code: c ?? 0 });
+      // A turn already written into the dying process's pipe was swallowed with it, and
+      // flushTurns() had already shifted it off the queue — so the respawn had nothing to flush
+      // and the chat sat silent forever. That is the "I press record and nothing happens" bug:
+      // it needs the exit to land mid-turn, which is exactly what a doomed --resume does.
+      if (busy && inFlight) { turnQueue.unshift(inFlight); console.log(`[${sessionId}] requeued the in-flight turn`); }
+      inFlight = null; busy = false; clearSilence();
+      send({ t: "exit", code: c ?? 0, detail: stderrTail.trim().split("\n").pop()?.slice(0, 200) || "" });
       // Drop the dead handle and bring the chat back. Without this `claude` still pointed at an
       // exited process, so flushTurns() happily wrote every later turn into a closed pipe and the
       // chat went permanently silent with no error anywhere — the "some chats just stop
@@ -228,6 +261,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   // nothing at all within this window, say so rather than leaving the chat mute — a wedged CLI
   // (expired login, usage limit) is otherwise indistinguishable from the app being broken.
   let busy = false;        // a turn is in flight (between stdin write and claude's `result`)
+  let inFlight = null;     // its text, so an exit before `result` can put it back on the queue
   let expectAbort = false; // we caused the next error result ourselves, so don't report it
   const interruptClaude = () =>
     claude?.stdin.write(JSON.stringify({ type: "control_request", request_id: "int-" + Date.now(), request: { subtype: "interrupt" } }) + "\n");
@@ -257,6 +291,7 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
       interruptClaude();
     }
     busy = true;
+    inFlight = text; // held until `result`, so an exit mid-turn can requeue it instead of losing it
     armSilence();
     return claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
   };
@@ -265,7 +300,12 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   const interrupt = isCodex
     ? () => { try { codexProc?.kill("SIGINT"); } catch { /* gone */ } }
     // A user-driven barge-in also produces an error result; it is expected, not worth reporting.
-    : () => { expectAbort = true; interruptClaude(); };
+    // Only when a turn is actually in flight, though. The relay fires an interrupt before every
+    // user turn on the assumption it is a no-op while claude is idle — true for a warm chat, but
+    // a resumed session is still starting up, so the interrupt got buffered and then cancelled the
+    // very turn it preceded. `expectAbort` latched on and swallowed the error, so the chat ended
+    // the turn with no text and no complaint: press record on an existing chat, get nothing back.
+    : () => { if (!busy) return; expectAbort = true; interruptClaude(); };
 
   function connect() {
     const sock = new WebSocket(RELAY_URL);
@@ -338,10 +378,21 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
         if (block.type === "tool_use") send({ t: "tool_use", name: block.name, summary: toolSummary(block), speak: toolSpeakable(block) });
       }
     } else if (m.type === "result") {
+      // A resumed/forked session replays the tail of the old transcript first, and if that tail
+      // ended on something with no turn of its own (a task notification, say) it emits a `result`
+      // with num_turns:0 and zero usage *before* our turn runs. Treating it as the answer ended
+      // the turn ~2s in with no text — the chat looked dead while the real reply was still coming
+      // (measured: stale result at 1.8s, actual first token at 11.3s). This is the whole "I press
+      // record on an existing chat and nothing happens" report; a fresh directory has no tail to
+      // replay, which is why only new sessions worked.
+      if (m.num_turns === 0 && !m.is_error && !turnText.trim()) {
+        console.log(`[${sessionId}] ignoring replayed result from the resumed transcript (num_turns=0)`);
+        return;
+      }
       let text = turnText.trim();
       // An error result has no streamed text -> the turn would end in dead silence. Surface it,
       // with a specific nudge for the common case (expired Claude Code login on the laptop).
-      busy = false;
+      busy = false; inFlight = null; // claude answered: nothing left to requeue if it exits now
       if ((m.is_error || m.subtype !== "success") && expectAbort) {
         // We interrupted this turn on purpose (barge-in, or a new turn arriving mid-turn).
         expectAbort = false;
@@ -356,9 +407,13 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
         console.log(`[${sessionId}] error result:`,
           JSON.stringify({ subtype: m.subtype, result: m.result, error: m.error, stop_reason: m.stop_reason, num_turns: m.num_turns }));
         const raw = String(m.result || m.error || m.subtype || "");
+        // "Prompt is too long" is the other one worth naming: picking up a long-running session on
+        // a small-context model fails every turn, and "try again" is the one thing that cannot work.
         text = /login|log in|auth|credential|expired|oauth|api key/i.test(raw)
           ? "Claude Code login expired on the laptop — run claude /login there, then ask again."
-          : `Claude hit an error${raw ? ` (${raw.slice(0, 160)})` : ""} — try again, or check the laptop log.`;
+          : /prompt is too long|context.{0,12}(window|length|limit)|too many tokens/i.test(raw)
+            ? `This chat is already longer than ${model}'s context — switch the model to opus or sonnet, or start a new chat.`
+            : `Claude hit an error${raw ? ` (${raw.slice(0, 160)})` : ""} — try again, or check the laptop log.`;
       }
       send({ t: "turn_end", fullText: text });
       turnText = "";
