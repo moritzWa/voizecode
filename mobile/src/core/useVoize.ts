@@ -94,6 +94,10 @@ export function useVoize() {
   const ramblingRef = useRef(false);
   const [speakingClip, setSpeakingClip] = useState<number | null>(null);
   const [speakingTime, setSpeakingTime] = useState(0);
+  // The line whose audio we asked for and have not heard yet. Tapping a paragraph sends a request
+  // and then sits silent for a round trip plus synthesis — with nothing on screen, that is
+  // indistinguishable from a tap that did not register, which is what it looked like.
+  const [pendingRead, setPendingRead] = useState<number | null>(null);
   const [clipWords, setClipWords] = useState<Record<number, SpokenWord[]>>({});
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -149,7 +153,15 @@ export function useVoize() {
   const echoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { activeRef.current = activeId; }, [activeId]);
-  useEffect(() => { store.setJSON(KEYS.convos, convos); convosRef.current = convos; }, [convos]);
+  // Coalesced, not immediate: this fires on every line of every reply and stringifies the whole
+  // transcript, on the JS thread, exactly while audio is streaming in. convosRef stays exact.
+  useEffect(() => { store.setJSONSoon(KEYS.convos, convos); convosRef.current = convos; }, [convos]);
+  // A backgrounded app may never get the timer, and being killed from the background is the
+  // normal way this app dies.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (st) => { if (st !== "active") store.flushJSON(); });
+    return () => { sub.remove(); store.flushJSON(); };
+  }, []);
   useEffect(() => {
     if (!activeId) return;
     const label = sessionsRef.current.find((s) => s.sessionId === activeId)?.label;
@@ -196,7 +208,7 @@ export function useVoize() {
     const p = new ClipPlayer(
       // The UI derives its speaking flag from speakingClip; this callback exists for the echo gate.
       (speaking) => gateMicForSpeech(speaking),
-      (clip) => { setSpeakingClip(clip); setSpeakingTime(0); setPaused(false); if (clip === null) replaying.current = false; },
+      (clip) => { setSpeakingClip(clip); setSpeakingTime(0); setPaused(false); if (clip !== null) setPendingRead(null); if (clip === null) replaying.current = false; },
       (_clip, t) => setSpeakingTime(t),
     );
     p.setRate(rateRef.current);
@@ -235,6 +247,7 @@ export function useVoize() {
 
   const stopAudio = useCallback(() => {
     player.current?.stop();
+    setPendingRead(null);
     setPaused(false);
     replayQ.current = []; replayNext.current = 0; replayPlayed.current = 0; replaying.current = false;
     vadPending.current = false;
@@ -351,12 +364,21 @@ export function useVoize() {
         case "history": {
           const lines: Line[] = (m.messages || []).map((mm: { role: string; text: string }) =>
             ({ kind: mm.role === "user" ? "user" : "agent", text: mm.text, history: true }));
-          // Only fill an EMPTY transcript. A resumed session's history is plain user/assistant
-          // turns — it has no narrated `speech` lines and no clip keys, so applying it over a
-          // transcript we already have replaces every spoken line with the raw reply and makes
-          // past lines unplayable. That is what happened after an app restart: the persisted
-          // transcript was clobbered by history arriving on reconnect.
-          setConvos((p) => (p[sid]?.length ? p : { ...p, [sid]: lines }));
+          // Only fill a transcript with no CONVERSATION in it yet. A resumed session's history is
+          // plain user/assistant turns — it has no narrated `speech` lines and no clip keys, so
+          // applying it over a transcript we already have replaces every spoken line with the raw
+          // reply and makes past lines unplayable. That is what happened after an app restart: the
+          // persisted transcript was clobbered by history arriving on reconnect.
+          //
+          // `status` lines do not count as conversation. They arrive from the relay the moment
+          // anything goes wrong — and a failed resume emits one ("claude exited (code 1) …")
+          // before the history lands, which is precisely when you most want the history. Counting
+          // it made the guard eat the whole transcript and leave a chat you cannot scroll up in,
+          // showing one error and nothing else.
+          // Any status lines already shown stay, after the history: they are newer than it, and an
+          // error worth printing is still worth reading once the transcript is there.
+          const isConvo = (l: Line) => l.kind !== "status";
+          setConvos((p) => (p[sid]?.some(isConvo) ? p : { ...p, [sid]: [...lines, ...(p[sid] ?? [])] }));
           break;
         }
         case "transcript":
@@ -438,6 +460,7 @@ export function useVoize() {
           // is the expected outcome for turns whose audio was never persisted (or has aged out).
           if (replayNext.current >= replayQ.current.length && replayQ.current.length && !replayPlayed.current) {
             replaying.current = false;
+            setPendingRead(null);
             addLine(sid || activeRef.current, { kind: "status", text: "no saved audio for that line — it can't be replayed" });
           }
           break;
@@ -613,6 +636,7 @@ export function useVoize() {
       .map((l) => ({ key: l.key as string, clip: l.clip as number }));
     if (!queue.length) return;
     stopAudio();
+    setPendingRead(start);
     replaying.current = true;
     replayQ.current = queue; replayAudio.current = {}; replayNext.current = 0; replayPlayed.current = 0;
     for (const item of queue) send({ t: "get_clip", key: item.key });
@@ -642,6 +666,7 @@ export function useVoize() {
     }
     if (!texts.length) return;
     stopAudio();
+    setPendingRead(lineIndex); // cleared by the first clip that starts, or by the no-audio status
     readbackQ.current = wanted;
     send({ t: "speak", sessionId: sid, texts });
   }, [convos, stopAudio]);
@@ -718,7 +743,7 @@ export function useVoize() {
     rate, setRate, start, stop, sendText, interruptNow, setModel, micError,
     voice, setVoice, clearChat, newSession, closeSession, muted, toggleMute, speakingClip,
     savedSessions, projects, requestSessions, openSession, newInProject, titles,
-    speakingTime, clipWords, prs, prsLoading, requestPRs, replayClip,
+    speakingTime, pendingRead, clipWords, prs, prsLoading, requestPRs, replayClip,
     paused, togglePlayback, rambling, toggleRamble, endRamble, cancelRamble, forkChat, readFrom,
     authError, submitCode, metas, thinkingSound, setThinkingSound,
   };
