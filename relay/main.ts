@@ -6,6 +6,7 @@
 // addresses sessions by id and shows them as tabs; one is "active" for audio.
 
 import { makeBlobStore } from "./storage.ts";
+import { stripFences } from "../shared/markdown.ts";
 
 const PORT = Number(Deno.env.get("VOIZE_RELAY_PORT") ?? 8787);
 const ENV_DEEPGRAM_KEY = Deno.env.get("DEEPGRAM_API_KEY") ?? "";
@@ -266,7 +267,12 @@ function isSubstantive(text: string): boolean {
 // Drop inline markdown markers so the spoken audio (and word timings) never include "star star"
 // or backticks. Display keeps the original markdown; this only feeds TTS.
 function stripMarkdown(t: string): string {
-  return t
+  // Fenced blocks go first, whole, before the inline rules can get at their insides. Stripping
+  // only the backticks (what this used to do) meant an ASCII diagram was read out as character
+  // soup — "sub dash agent colon needs underscore credential open paren domain equals quote…" —
+  // for as long as the diagram was wide. The client renders the block on screen and counts it for
+  // no words, so the timings still line up.
+  return stripFences(t)
     .replace(/`([^`]+)`/g, "$1")        // `code`
     .replace(/\*\*([^*]+)\*\*/g, "$1")  // **bold**
     .replace(/__([^_]+)__/g, "$1")      // __bold__
