@@ -6,7 +6,7 @@
 // addresses sessions by id and shows them as tabs; one is "active" for audio.
 
 import { makeBlobStore } from "./storage.ts";
-import { stripFences } from "../shared/markdown.ts";
+import { spokenText } from "../shared/markdown.ts";
 import { mapConcurrent, OrderedEmitter } from "../shared/ordered.ts";
 
 const PORT = Number(Deno.env.get("VOIZE_RELAY_PORT") ?? 8787);
@@ -276,8 +276,9 @@ function stripMarkdown(t: string): string {
   // only the backticks (what this used to do) meant an ASCII diagram was read out as character
   // soup — "sub dash agent colon needs underscore credential open paren domain equals quote…" —
   // for as long as the diagram was wide. The client renders the block on screen and counts it for
-  // no words, so the timings still line up.
-  return stripFences(t)
+  // no words, so the timings still line up. spokenText also drops unordered-list markers, which
+  // the client draws as a bullet glyph rather than a word.
+  return spokenText(t)
     .replace(/`([^`]+)`/g, "$1")        // `code`
     .replace(/\*\*([^*]+)\*\*/g, "$1")  // **bold**
     .replace(/__([^_]+)__/g, "$1")      // __bold__

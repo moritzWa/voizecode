@@ -8,7 +8,7 @@
 //
 //   node test/markdown.mjs
 
-import { splitBlocks, stripFences, styledWords } from "../shared/markdown.ts";
+import { splitBlocks, stripFences, styledWords, proseItems, spokenText } from "../shared/markdown.ts";
 
 let pass = 0, total = 0;
 const check = (name, cond, got) => {
@@ -76,6 +76,42 @@ const drawn = splitBlocks(REPLY).filter((b) => b.type === "prose")
   .flatMap((para) => styledWords(para)).length;
 const spokenWords = styledWords(stripFences(REPLY)).length;
 check(`drawn words == spoken words (${drawn} vs ${spokenWords})`, drawn === spokenWords);
+
+// ---- lists --------------------------------------------------------------------------------
+// The reply from the second bug screenshot: items separated by single newlines, which used to
+// collapse into one paragraph with every "-" drawn as a word.
+console.log("\n=== markdown: lists ===");
+const LIST = `Where we are:
+
+- **Architecture**: parent agent → dumb VM with a control adapter.
+- **Contract**: returns \`{status, result}\`. Images backlogged.
+- **Policy** = guardrail text passed as a second arg.
+
+Next step we hadn't started.`;
+
+const items = proseItems(LIST);
+check("each list item is its own row", items.map((i) => i.kind).join(",") === "p,li,li,li,p", items.map((i) => i.kind));
+check("bullet markers are not part of the item text", items.filter((i) => i.kind === "li").every((i) => !i.text.startsWith("-")));
+check("item text is intact", items[2]?.text === "**Contract**: returns `{status, result}`. Images backlogged.", items[2]?.text);
+
+const ol = proseItems("Plan:\n1. Scaffold the repo\n   (continuation of one)\n2) Run the test\n3. Decide");
+check("ordered items get their own rows, `1.` and `2)` both", ol.map((i) => i.kind).join(",") === "p,ol,ol,ol", ol.map((i) => i.kind));
+check("a wrapped continuation line joins its item", ol[1]?.text === "Scaffold the repo (continuation of one)", ol[1]?.text);
+check("ordered marker is kept for display", ol[1]?.marker === "1." && ol[2]?.marker === "2)", [ol[1]?.marker, ol[2]?.marker]);
+
+check("a line starting **bold** is not a bullet", proseItems("**Bold** start").map((i) => i.kind).join() === "p");
+check("a dash mid-sentence is not a bullet", proseItems("a - b - c").map((i) => i.kind).join() === "p");
+check("soft-wrapped paragraph lines still join", proseItems("one line\nwraps here")[0]?.text === "one line wraps here");
+
+// The alignment contract again, now with lists on both sides: bullets are drawn as a glyph and
+// dropped from speech; ordered markers are a counted word on both sides.
+const countDrawn = (t) => splitBlocks(t).filter((b) => b.type === "prose")
+  .flatMap((b) => proseItems(b.text))
+  .reduce((n, it) => n + styledWords(it.text).length + (it.kind === "ol" ? 1 : 0), 0);
+const countSpoken = (t) => styledWords(spokenText(t)).length;
+const MIXED = LIST + "\n\n1. first\n2. second\n\n```\n- not a bullet, it's code\n```\n\n- after the fence";
+check(`lists: drawn words == spoken words (${countDrawn(MIXED)} vs ${countSpoken(MIXED)})`, countDrawn(MIXED) === countSpoken(MIXED));
+check("bullet markers never reach the speech", !/^\s*[-*•]\s/m.test(spokenText(MIXED)), spokenText(MIXED));
 
 console.log(`\n${pass}/${total} passed\n`);
 process.exit(pass === total ? 0 : 1);
