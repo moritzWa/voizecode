@@ -13,7 +13,7 @@ import { memo, useEffect, useMemo } from "react";
 import { ScrollView, Text, View, type ViewStyle } from "react-native";
 import Animated, { interpolateColor, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import type { SpokenWord } from "@shared/protocol";
-import { splitBlocks, styledWords, type StyledWord } from "@shared/markdown";
+import { proseItems, splitBlocks, styledWords, type StyledWord } from "@shared/markdown";
 import { usePalette, type Palette } from "./theme";
 
 // Fenced blocks have to come out of the text before anything else touches it. The word renderer
@@ -146,33 +146,69 @@ export const RichText = memo(function RichText({ text, words = [], t = 0, active
   text: string; words?: SpokenWord[]; t?: number; active?: boolean;
 }) {
   const p = usePalette();
-  // Fenced blocks first, then paragraphs within each prose run. A code block is rendered whole and
-  // counts for no words, which is what keeps the highlight aligned: the relay strips fences before
-  // synthesis, so they are absent from the spoken text and its timings too.
-  const parts = useMemo(() => splitBlocks(text).flatMap((b) => b.type === "code"
-    ? [b]
-    : b.text.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean).map((s) => ({ type: "prose" as const, text: s }))), [text]);
+  // Fenced blocks first, then paragraphs and list items within each prose run. A code block is
+  // rendered whole and counts for no words; a bullet is drawn as a glyph and counts for none either;
+  // an ordered marker ("1.") is a real word. That is exactly what the relay speaks (spokenText), and
+  // it is what keeps the highlight aligned. Words are split here, once per text, so the memoized rows
+  // get stable arrays instead of fresh ones on every playback tick.
+  const parts = useMemo(() => splitBlocks(text).flatMap((b): Part[] => b.type === "code"
+    ? [{ kind: "code", text: b.text }]
+    : proseItems(b.text).map((it): Part => it.kind === "ol"
+      ? { kind: "ol", marker: [{ text: it.marker }], sw: styledWords(it.text) }
+      : { kind: it.kind, sw: styledWords(it.text) })), [text]);
   // Word timings are for the whole line, but the text is rendered per paragraph — so track a
   // running offset to map a global word index onto each paragraph's local one.
   let seen = 0;
   let cursor = -1;
   if (active) for (let i = 0; i < words.length; i++) { if (words[i].start <= t) cursor = i; else break; }
+  const isItem = (x?: Part) => x?.kind === "li" || x?.kind === "ol";
   return (
     <View>
       {parts.map((part, i) => {
-        if (part.type === "code") return <CodeBlock key={i} text={part.text} p={p} />;
-        const sw = styledWords(part.text);
-        const base = seen; seen += sw.length;
+        if (part.kind === "code") return <CodeBlock key={i} text={part.text} p={p} />;
+        const next = parts[i + 1];
+        // Items of one list sit close together; everything else keeps paragraph spacing.
+        const gap = !next ? 0 : isItem(part) && isItem(next) ? 4 : 10;
+        if (part.kind === "p") {
+          const base = seen; seen += part.sw.length;
+          return (
+            <WordRow
+              key={i} sw={part.sw} base={base} cursor={cursor} p={p}
+              // Only a line actually being read aloud needs animated words. A restored transcript is
+              // hundreds of these rows; giving every word a shared value was most of the mount cost.
+              animated={active}
+              style={{ marginBottom: gap }}
+            />
+          );
+        }
+        const marker = part.kind === "ol" ? part.marker : NO_WORDS;
+        const base = seen; seen += marker.length + part.sw.length;
         return (
-          <WordRow
-            key={i} sw={sw} base={base} cursor={cursor} p={p}
-            // Only a line actually being read aloud needs animated words. A restored transcript is
-            // hundreds of these rows; giving every word a shared value was most of the mount cost.
-            animated={active}
-            style={{ marginBottom: i < parts.length - 1 ? 10 : 0 }}
-          />
+          // Hanging indent: the marker gets its own column so wrapped lines of the item line up
+          // under its text, not under the bullet.
+          <View key={i} style={{ flexDirection: "row", marginBottom: gap }}>
+            {/* Fixed, not minWidth: "1." is narrower than "2.", and a column sized to its marker
+                started item one's text a few px left of the rest. Right-aligned, so numbers line up
+                on the period. */}
+            <View style={{ width: 24, paddingRight: 4, alignItems: "flex-end" }}>
+              {part.kind === "li"
+                // lineHeight matches a word box (20 text + 2x2 padding + 2x1 margin), so the dot
+                // sits on the first line's centre.
+                ? <Text style={{ color: p.foreground, fontSize: 14.5, lineHeight: 26 }}>•</Text>
+                : <WordRow sw={marker} base={base} cursor={cursor} p={p} animated={active} />}
+            </View>
+            <View style={{ flex: 1 }}>
+              <WordRow sw={part.sw} base={base + marker.length} cursor={cursor} p={p} animated={active} />
+            </View>
+          </View>
         );
       })}
     </View>
   );
 });
+
+type Part =
+  | { kind: "code"; text: string }
+  | { kind: "p" | "li"; sw: StyledWord[] }
+  | { kind: "ol"; marker: StyledWord[]; sw: StyledWord[] };
+const NO_WORDS: StyledWord[] = [];
