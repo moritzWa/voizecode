@@ -110,9 +110,17 @@ function CodeBlock({ text, p }: { text: string; p: Palette }) {
       style={{ backgroundColor: p.codeBg, borderRadius: 8, marginVertical: 6, flexGrow: 0 }}
       contentContainerStyle={{ paddingHorizontal: 10, paddingVertical: 8 }}
     >
-      <Text selectable style={{ color: p.codeFg, fontFamily: "Menlo", fontSize: 11.5, lineHeight: 16 }}>
-        {text}
-      </Text>
+      {/* Claims the touch so no ancestor can. Transcript messages are wrapped in a tap-to-read
+          Pressable, and that Pressable took every swipe that started on the block as a tap: the
+          block rendered correctly but would not scroll sideways at all. Reproduced headlessly with
+          Maestro — inside the Pressable a swipe moved it 0px and fired read-aloud; with this view
+          it moves 376px and fires nothing. Swallowing the tap is also right on its own terms: the
+          relay never speaks fenced blocks, so "read from here" on a diagram has nothing to read. */}
+      <View onStartShouldSetResponder={() => true}>
+        <Text selectable style={{ color: p.codeFg, fontFamily: "Menlo", fontSize: 11.5, lineHeight: 16 }}>
+          {text}
+        </Text>
+      </View>
     </ScrollView>
   );
 }
