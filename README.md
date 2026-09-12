@@ -9,20 +9,6 @@ The killer feature isn't voice *input*, it's voice *output*: instead of reading 
 a narrator continuously summarizes what it's doing — *"I found the likely bug… there are no tests for
 it, so I'll add one first."* That's pair-programming, not terminal-watching.
 
-### V1 workflows (what it's for)
-- Explain this PR · Explain this file · Find where something happens · Make a simple change · Narrate progress
-
-### Roadmap
-- [x] Desktop: voice loop, narrator, multi-chat, cross-directory session browser, PR context, Electron app
-- [x] Word-level (Speechify-style) highlighting synced to speech
-- [x] Selectable engines: Codex CLI alongside Claude Code (pick per chat)
-- [x] Mobile: phone talks to the laptop from anywhere (cellular) via the deployed relay + access-token URL
-- [x] Click-to-replay with continuous read-through (clips persisted to R2, no re-synthesis)
-- [ ] Playback controls by voice (pause / continue / slower / "explain that again")
-- [ ] iOS lock-screen mode: keep audio + mic alive with the screen off (persistent `<audio>` + MediaSession)
-- [ ] Faster narrator path
-- [ ] One-command install + 30-second demo
-
 ## Architecture (3 tiers, relay in the middle)
 
 ```
@@ -48,6 +34,20 @@ it, so I'll add one first."* That's pair-programming, not terminal-watching.
 Two independent WebSocket connections, each with heartbeat + watchdog + backoff reconnect.
 Phone drops → laptop keeps working, relay buffers, phone catches up via seq replay. The
 relay can restart and both ends self-heal. (More robust than a single tunnel.)
+
+## V1 workflows (what it's for)
+- Explain this PR · Explain this file · Find where something happens · Make a simple change · Narrate progress
+
+## Roadmap
+- [x] Desktop: voice loop, narrator, multi-chat, cross-directory session browser, PR context, Electron app
+- [x] Word-level (Speechify-style) highlighting synced to speech
+- [x] Selectable engines: Codex CLI alongside Claude Code (pick per chat)
+- [x] Mobile: phone talks to the laptop from anywhere (cellular) via the deployed relay + access-token URL
+- [x] Click-to-replay with continuous read-through (clips persisted to R2, no re-synthesis)
+- [ ] Playback controls by voice (pause / continue / slower / "explain that again")
+- [ ] iOS lock-screen mode: keep audio + mic alive with the screen off (persistent `<audio>` + MediaSession)
+- [ ] Faster narrator path
+- [ ] One-command install + 30-second demo
 
 ## How it works
 
