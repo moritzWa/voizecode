@@ -68,6 +68,16 @@ const TOOL_SPEAK_THROTTLE_MS = Number(Deno.env.get("VOIZE_TOOL_SPEAK_THROTTLE_MS
 // still strictly ordered; this only decides how much work runs early. Above ~3 the extra clips
 // are finished long before anyone hears them, and each one is a paid TTS request.
 const SPEAK_LOOKAHEAD = Number(Deno.env.get("VOIZE_SPEAK_LOOKAHEAD") ?? 3);
+// Overridable so the ramble-flush test can stand a fake Deepgram in front of the relay; nothing
+// else has any business pointing this elsewhere.
+const DG_URL = Deno.env.get("VOIZE_DG_URL") ?? "wss://api.deepgram.com/v1/listen";
+// How long a ramble flush waits for Deepgram to turn the tail of your sentence into a final after
+// being asked to Finalize. Long enough for the round trip, short enough not to feel like a hang;
+// whatever has not arrived by then is taken from the interim text instead.
+const FINALIZE_WAIT_MS = Number(Deno.env.get("VOIZE_FINALIZE_WAIT_MS") ?? 700);
+// After a final lands during a flush, how long to wait for another before sending. Finalize can
+// return more than one, and delivering on the first would cut the end off the sentence.
+const FINALIZE_SETTLE_MS = Number(Deno.env.get("VOIZE_FINALIZE_SETTLE_MS") ?? 250);
 
 interface Session {
   id: string;
@@ -77,9 +87,14 @@ interface Session {
   dg: WebSocket | null;
   dgQueue: Uint8Array[];
   utter: string;
-  utterTimer?: number;
+  // ReturnType, not number: Deno's setTimeout is typed as returning a Timeout, so `number` was a
+  // standing type error on every assignment (two of them, from before this change).
+  utterTimer?: ReturnType<typeof setTimeout>;
   utterExt?: number;       // how many times delivery was deferred because the utterance looked unfinished
   hold?: boolean;          // ramble/dictation mode: accumulate speech across pauses, commit only on explicit flush
+  partial?: string;        // the in-progress transcript: said, shown on screen, not yet endpointed by Deepgram
+  flushing?: boolean;      // a ramble flush is waiting for Deepgram's last finals
+  flushTimer?: ReturnType<typeof setTimeout>; // its own handle: the is_final path clears utterTimer, which would cancel it
   lastToolSpeakAt: number; // throttle spoken tool-call updates
   keys: Keys;              // BYOK: the agent's own provider keys, else the relay's env keys
 }
@@ -213,8 +228,8 @@ function broadcastSessions() {
 // ====================================================================
 function openDeepgram(s: Session) {
   if (!s.keys.dg || s.dg) return;
-  const url =
-    "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1" +
+  const url = DG_URL +
+    "?encoding=linear16&sample_rate=16000&channels=1" +
     "&model=nova-2&interim_results=true&smart_format=true&endpointing=300&utterance_end_ms=1200";
   const dg = new WebSocket(url, ["token", s.keys.dg]);
   s.dg = dg;
@@ -228,13 +243,25 @@ function openDeepgram(s: Session) {
     if (!text) return;
     if (m.is_final) {
       s.utter += text + " ";
+      s.partial = ""; // folded into the buffer now
       s.utterExt = 0; // more speech arrived -> give a fresh full grace window before committing
       console.log(`[relay:${s.id}] stt final${s.hold ? " (ramble)" : ""}: "${text}" [buf ${s.utter.trim().length} chars]`);
       toClient(s.id, { t: "transcript", text: s.utter.trim(), final: false });
       clearTimeout(s.utterTimer);
-      // Ramble mode: keep accumulating; never auto-commit — the user flushes explicitly.
-      if (!s.hold) s.utterTimer = setTimeout(() => deliverUtterance(s), UTTER_GAP_MS);
+      // The finals a flush is waiting for. Don't deliver on the first one — Finalize can produce
+      // more than one — just restart a short settle window and let it finish.
+      if (s.flushing) {
+        clearTimeout(s.flushTimer);
+        s.flushTimer = setTimeout(() => completeFlush(s), FINALIZE_SETTLE_MS);
+        return;
+      }
+      // Ramble mode: keep accumulating; never auto-commit — the user flushes explicitly. Nor while
+      // a flush is already waiting on these very finals; it delivers them itself.
+      if (!s.hold && !s.flushing) s.utterTimer = setTimeout(() => deliverUtterance(s), UTTER_GAP_MS);
     } else {
+      // Remember the tail. It is only on screen, not in `utter`, until Deepgram endpoints it —
+      // and tapping send before that used to throw it away (see flushRamble).
+      s.partial = text;
       toClient(s.id, { t: "transcript", text: (s.utter + text).trim(), final: false });
     }
   };
@@ -324,6 +351,35 @@ function deliverUtterance(s: Session) {
     toClient(s.id, { t: "utterance_discarded", sessionId: s.id });
   }
 }
+// Send what the ramble collected, and always tell the client something.
+function completeFlush(s: Session) {
+  s.flushing = false;
+  clearTimeout(s.flushTimer);
+  clearTimeout(s.utterTimer);
+  // The interim tail counts. It is what you said and what is on screen; only Deepgram's endpointing
+  // has not caught up with it yet.
+  const text = `${s.utter} ${s.partial ?? ""}`.trim();
+  s.utter = ""; s.partial = ""; s.utterExt = 0;
+  if (text) { console.log(`[relay:${s.id}] ramble flush -> ${text.length} chars`); deliverUserTurn(s, text); return; }
+  // Genuinely nothing. Say so: sending neither a turn nor a discard is what left the draft greyed
+  // out at the bottom of the transcript, unsent, with no way to get it back.
+  console.log(`[relay:${s.id}] ramble flush had nothing to send`);
+  toClient(s.id, { t: "utterance_discarded", sessionId: s.id });
+  toClient(s.id, { t: "status", text: "nothing was transcribed — check the mic and try again", seq: nextSeq() });
+}
+
+// Tapping send is precisely not the pause that Deepgram endpoints on, so the tail of the sentence
+// (often all of it) is still interim at that moment. Ask Deepgram to Finalize, give the finals a
+// beat to land, then deliver — falling back to the interim text if they never come.
+function flushRamble(s: Session) {
+  clearTimeout(s.utterTimer);
+  if (s.dg?.readyState === WebSocket.OPEN) {
+    s.flushing = true;
+    try { s.dg.send(JSON.stringify({ type: "Finalize" })); } catch { /* fall through to the timer */ }
+    s.flushTimer = setTimeout(() => completeFlush(s), FINALIZE_WAIT_MS);
+  } else completeFlush(s);
+}
+
 function deliverUserTurn(s: Session, text: string) {
   const agentUp = s.agent?.readyState === WebSocket.OPEN || remoteHasSession(s.id);
   console.log(`[relay:${s.id}] user: ${text}${agentUp ? "" : "  ⚠ NO AGENT CONNECTED — turn dropped, will appear stuck on 'working'"}`);
@@ -711,20 +767,17 @@ function handleClient(m: Record<string, unknown>, from: WebSocket) {
       s.hold = !!m.on;
       clearTimeout(s.utterTimer);
       if (s.hold) { console.log(`[relay:${s.id}] ramble ON (accumulating)`); }
-      else {
-        const t = s.utter.trim(); s.utter = ""; s.utterExt = 0;
-        // discard = the user changed their mind mid-ramble. Same teardown as a flush, minus the
-        // delivery: without this the only way out of ramble mode is to send what you said, which
-        // makes thinking out loud risky in exactly the mode meant for it.
-        if (m.discard) {
-          console.log(`[relay:${s.id}] ramble DISCARD -> dropped ${t.length} chars`);
-          toClient(s.id, { t: "utterance_discarded", sessionId: s.id });
-          break;
-        }
-        console.log(`[relay:${s.id}] ramble OFF -> flush ${t.length} chars: "${t.slice(0, 60)}${t.length > 60 ? "…" : ""}"`);
-        if (t) deliverUserTurn(s, t);
-        else console.log(`[relay:${s.id}] ramble flush had EMPTY buffer (nothing transcribed?)`);
+      // discard = the user changed their mind mid-ramble. Same teardown as a flush, minus the
+      // delivery: without this the only way out of ramble mode is to send what you said, which
+      // makes thinking out loud risky in exactly the mode meant for it.
+      else if (m.discard) {
+        const n = `${s.utter} ${s.partial ?? ""}`.trim().length;
+        s.utter = ""; s.partial = ""; s.utterExt = 0; s.flushing = false;
+        clearTimeout(s.flushTimer);
+        console.log(`[relay:${s.id}] ramble DISCARD -> dropped ${n} chars`);
+        toClient(s.id, { t: "utterance_discarded", sessionId: s.id });
       }
+      else flushRamble(s);
       break;
     case "new_session": toAgent(s, { t: "new_chat", cwd: m.cwd, resumeId: m.resumeId, label: m.label, engine: m.engine }); break;
     case "fork": toAgent(s, { t: "fork", userIndex: m.userIndex, text: m.text }); break;
