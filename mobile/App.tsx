@@ -1,7 +1,7 @@
 // Native port of the web client's index.tsx. Structure, control layout and wording follow it
 // closely on purpose — this is the same app on a different screen, not a companion with a
 // different opinion. Read them side by side when changing either.
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View,
 } from "react-native";
@@ -233,6 +233,27 @@ function Main() {
   // scroll fires against a container that is still growing and lands short. `stickBottom` keeps
   // us pinned through those layout passes (see onContentSizeChange) until the user scrolls away.
   const stickBottom = useRef(true);
+  // Where each line sits in the transcript, so the one being read can be scrolled to. Measured on
+  // layout because the rows are variable height (a restored turn can be a screen tall on its own).
+  const lineY = useRef<Record<number, number>>({});
+  // The line currently being spoken, if any.
+  const speakingIndex = useMemo(
+    () => (v.speakingClip == null ? -1 : v.lines.findIndex((l: Line) => l.clip === v.speakingClip)),
+    [v.lines, v.speakingClip],
+  );
+  // Follow the reader. A reply streams in faster than it is spoken, so sticking to the bottom left
+  // the highlight somewhere above the fold and you had to scroll back up to find your place. Keep
+  // the spoken line on screen instead; `stickBottom` still governs, so scrolling away by hand stops
+  // this until the next chat switch or the next line that arrives while nothing is being read.
+  useEffect(() => {
+    if (speakingIndex < 0 || !stickBottom.current) return;
+    const y = lineY.current[speakingIndex];
+    if (y == null) return;
+    // A little above the line: seeing the sentence before it is what makes it read as a position
+    // in the answer rather than a lone highlighted row.
+    const id = setTimeout(() => scroller.current?.scrollTo({ y: Math.max(0, y - 72), animated: true }), 30);
+    return () => clearTimeout(id);
+  }, [speakingIndex]);
   useEffect(() => {
     const switched = prevChat.current !== v.activeId;
     prevChat.current = v.activeId;
@@ -383,7 +404,12 @@ function Main() {
             ref={scroller}
             // Fires on every layout pass as a restored transcript fills in; keeps us at the newest
             // message until the user scrolls up, which clears the flag below.
-            onContentSizeChange={() => { if (stickBottom.current) scroller.current?.scrollToEnd({ animated: false }); }}
+            onContentSizeChange={() => {
+              // Not while something is being read: the reply keeps streaming in under the spoken
+              // line, and every growth used to fire scrollToEnd and yank the view off it. The
+              // effect above follows the reader instead; this only pins new output when silent.
+              if (stickBottom.current && v.speakingClip == null) scroller.current?.scrollToEnd({ animated: false });
+            }}
             onScrollBeginDrag={() => { stickBottom.current = false; }}
             scrollEventThrottle={16}
             // Full-bleed: the transcript is the content, and side padding here only narrowed the
@@ -392,6 +418,10 @@ function Main() {
             contentContainerClassName="px-3 py-4 gap-2.5"
           >
             {v.lines.map((l: Line, i: number) => {
+              // Each row is measured on layout so the follow-the-reader effect knows where to
+              // scroll. Rows are wildly variable in height — a restored turn can be a screen tall
+              // on its own — so a line's position cannot be derived, only measured.
+              const node = (() => {
               if (l.kind === "agent") {
                 const act = l.clip != null && l.clip === v.speakingClip;
                 return (
@@ -441,6 +471,10 @@ function Main() {
               }
 
               return <Text key={i} className="px-1 text-[12px] italic text-muted-foreground">{l.text}</Text>;
+              })();
+              return (
+                <View key={i} onLayout={(e) => { lineY.current[i] = e.nativeEvent.layout.y; }}>{node}</View>
+              );
             })}
             {/* While rambling, the live transcript is a *draft* — the relay is accumulating it and
                 will not deliver anything until you tap send. Showing it identically to a sent
