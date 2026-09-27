@@ -44,6 +44,9 @@ relay can restart and both ends self-heal. (More robust than a single tunnel.)
 - [x] Selectable engines: Codex CLI alongside Claude Code (pick per chat)
 - [x] Mobile: phone talks to the laptop from anywhere (cellular) via the deployed relay + access-token URL
 - [x] Click-to-replay with continuous read-through (clips persisted to R2, no re-synthesis)
+- [x] Join a live `--bg` agent-view session for real (`claude attach`, via a pty) instead of
+  forking a divergent copy — pick the same session up from your phone and your desktop and stay
+  in sync. Foreground (non-`--bg`) sessions still fork; there's no other door in for those.
 - [ ] Playback controls by voice (pause / continue / slower / "explain that again")
 - [ ] iOS lock-screen mode: keep audio + mic alive with the screen off (persistent `<audio>` + MediaSession)
 - [ ] Faster narrator path

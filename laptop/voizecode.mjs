@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
+import { startAttach, liveBackgroundSessions } from "./attach.mjs";
 
 const RELAY_URL = process.env.VOIZE_RELAY_URL || "ws://localhost:8787";
 const DEFAULT_MODEL = process.env.VOIZE_MODEL || "sonnet";
@@ -111,16 +112,50 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   let claudeReady = false;            // true once the live claude has emitted `init` (safe to send turns)
   const turnQueue = [];               // turns buffered while claude (re)starts
   let codexProc = null, codexThread = isCodex ? resume : null; // codex: per-turn `exec`, resume by thread id
+  // A live *background* (`--bg`/agent-view) session can be joined for real via `claude attach`
+  // instead of diverging into a fork — see attach.mjs. A live *interactive* (foreground) session
+  // has no such door in; it still forks, same as before. Checked once at chat creation: this
+  // reflects whether the OTHER end (desktop agent view, another voizecode tab) is already running
+  // it, not something this chat flips on its own.
+  const attachShortId = !isCodex && resume ? liveBackgroundSessions(execFileSync).get(resume) : undefined;
+  const isAttach = attachShortId !== undefined;
+  let attachHandle = null;
   let ws = null, hbTimer = null, wdTimer = null, retry = 0, closed = false;
 
   const send = (m) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ ...m, sessionId }));
   const announce = () => send({ t: "init", sessionId, model: isCodex ? "codex" : model, label, engine });
 
+  // Join a live `--bg` session for real instead of forking it. `claude attach` renders Ink's
+  // live TUI, so this runs it in a pseudo-terminal and screen-scrapes the transcript back out
+  // (see attach.mjs for why, and its known rough edges). Not started for isCodex (Claude-only).
+  function startAttachProc() {
+    console.log(`[${sessionId}] attaching to live background session ${resume.slice(0, 8)} (${attachShortId})`);
+    attachHandle = startAttach({
+      shortId: attachShortId,
+      cwd,
+      onDelta: (text) => send({ t: "delta", text }),
+      onTurnEnd: (text) => send({ t: "turn_end", fullText: text }),
+      onExit: (code, detail) => {
+        console.log(`[${sessionId}] attach exited`, code, detail || "");
+        send({ t: "exit", code: code ?? 0, detail: detail || "detached from the live session" });
+        attachHandle = null;
+        if (closed) return;
+        // The bg session itself keeps running (this only exited our *view* of it) — reattach
+        // rather than treating it like a crash. Same backoff shape as the fork path's respawn.
+        setTimeout(() => { if (!closed && !attachHandle) startAttachProc(); }, 1500);
+      },
+      onLog: (l) => console.log(`[${sessionId}] attach: ${l}`),
+    });
+    liveSessionId = resume;
+    send({ t: "meta", claudeSessionId: resume, cwd });
+  }
+
   function startClaude(fork = false) {
     // VOIZE_NO_ANNOUNCE lets the user's Stop hook (done-announce.sh) skip the "finished" sound —
     // we already speak the reply, so the chime is redundant for voizecode sessions.
     // A live background session refuses a plain --resume, so fork from the start rather than
-    // spending a doomed spawn (~3s of dead air) on discovering it.
+    // spending a doomed spawn (~3s of dead air) on discovering it. (isAttach sessions never reach
+    // here — see the `if (!isCodex && isAttach)` branch at the bottom of startChat instead.)
     if (resume && !fork && liveSessionIds().has(resume)) {
       console.log(`[${sessionId}] ${resume.slice(0, 8)} is a live background session — forking instead of resuming`);
       fork = true;
@@ -159,6 +194,9 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     });
   }
   function switchModel(next) {
+    // An attached session's model is whatever the OTHER end (agent view, another tab) is
+    // running — there's no separate "our" claude process here to restart with a different one.
+    if (isAttach) { send({ t: "tool_use", name: "stuck", summary: "model is fixed while attached to a live session — switch it from wherever else has it open", speak: false }); return; }
     if (next === model || !["haiku", "sonnet", "opus"].includes(next)) return;
     console.log(`[${sessionId}] model ${model} -> ${next}`);
     model = next;
@@ -167,6 +205,10 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
   }
   function resetSession() {
     if (isCodex) { codexThread = null; try { codexProc?.kill("SIGINT"); } catch { /* gone */ } codexProc = null; announce(); return; }
+    // pushTurn/interrupt are wired to attachHandle for this chat's whole lifetime (isAttach is
+    // fixed at creation); "reset" would need to rewire them to a fresh claude process instead,
+    // which isAttach's const-ness doesn't support today. Close this chat and start a new one.
+    if (isAttach) { send({ t: "tool_use", name: "stuck", summary: "can't reset an attached chat — close this tab and start a fresh one instead", speak: false }); return; }
     console.log(`[${sessionId}] reset (fresh claude context)`);
     resume = null; // new chat = drop any resumed session
     const old = claude; startClaude(); old?.stdin.end(); old?.kill("SIGINT");
@@ -296,8 +338,10 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     return claude?.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n");
   };
   const flushTurns = () => { while (claude && turnQueue.length) writeClaude(turnQueue.shift()); };
-  const pushTurn = isCodex ? codexTurn : (text) => { turnQueue.push(text); flushTurns(); };
-  const interrupt = isCodex
+  const pushTurn = isAttach ? (text) => attachHandle?.write(text)
+    : isCodex ? codexTurn : (text) => { turnQueue.push(text); flushTurns(); };
+  const interrupt = isAttach ? () => attachHandle?.interrupt()
+    : isCodex
     ? () => { try { codexProc?.kill("SIGINT"); } catch { /* gone */ } }
     // A user-driven barge-in also produces an error result; it is expected, not worth reporting.
     // Only when a turn is actually in flight, though. The relay fires an interrupt before every
@@ -337,6 +381,9 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
         closed = true;
         clearTimers();
         try { claude?.kill("SIGINT"); } catch { /* noop */ }
+        // Only detaches our view (kills the `claude attach` process) — the bg session itself
+        // keeps running, same as pressing Ctrl-D twice in a real terminal.
+        try { attachHandle?.kill(); } catch { /* noop */ }
         try { sock.close(); } catch { /* noop */ }
         const i = chats.findIndex((c) => c.sessionId === sessionId);
         if (i >= 0) chats.splice(i, 1);
@@ -420,9 +467,18 @@ function startChat(sessionId, label, initialModel, cwd, resumeId, engine = "clau
     }
   }
 
-  if (!isCodex) startClaude(); // codex spawns per-turn, not persistently
+  if (isAttach) startAttachProc();
+  else if (!isCodex) startClaude(); // codex spawns per-turn, not persistently
   connect();
-  return { sessionId, kill: () => { try { claude?.kill("SIGINT"); } catch { /* noop */ } try { codexProc?.kill("SIGINT"); } catch { /* noop */ } try { ws?.close(); } catch { /* noop */ } } };
+  return {
+    sessionId,
+    kill: () => {
+      try { claude?.kill("SIGINT"); } catch { /* noop */ }
+      try { codexProc?.kill("SIGINT"); } catch { /* noop */ }
+      try { attachHandle?.kill(); } catch { /* noop */ } // detaches our view; the bg session itself keeps running
+      try { ws?.close(); } catch { /* noop */ }
+    },
+  };
 }
 
 // Short status line for a Codex tool/event item.

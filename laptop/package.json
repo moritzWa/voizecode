@@ -2,11 +2,19 @@
   "name": "voizecode-laptop",
   "version": "0.0.0",
   "type": "module",
-  "bin": { "voizecode": "./voizecode.mjs" },
+  "bin": {
+    "voizecode": "./voizecode.mjs"
+  },
   "scripts": {
-    "start": "node voizecode.mjs"
+    "start": "node voizecode.mjs",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0",
     "ws": "^8.18.0"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }
