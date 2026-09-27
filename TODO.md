@@ -295,3 +295,43 @@ shoves the icon off-centre ("record icon not centred"). Button label colours are
   degrades gracefully.
 - Clips are replayable from R2 via `get_clip`/`clip_audio` — never re-synthesize.
 - Lines from a *resumed* session's history were never spoken, have no clips, aren't clickable.
+
+## Found live, 2026-09-27, while shipping the attach fix (#9) — not yet acted on
+
+Surfaced by actually restarting a production `voizecode.mjs` while it was mid-conversation.
+None of this is theoretical; each bullet is something that happened, not a guess.
+
+- **Nothing stops two `voizecode.mjs` instances running at once.** Killed the "production"
+  one (up since Sep 10), and a *second*, unrelated instance — already running independently
+  for 1h18m, cwd `/Users/m` — picked up the reconnect instead. Neither knew the other
+  existed. `bin/voize`'s `pgrep -f "laptop/voizecode.mjs"` check only guards against a second
+  `voize` *invocation* racing itself; it does nothing once two are already up from different
+  origins (a stray manual launch, a login item, an old `voize` that never got killed). Needs a
+  real single-instance lock — a pidfile at `~/.voizecode/voizecode.pid`, checked and cleaned
+  up on start, not just a `pgrep` at launch time.
+- **A foreground (non-`--bg`) chat still forks every time its `claude` child exits and
+  respawns while its id is still "live" by CLI's own bookkeeping** — this is
+  `startClaude()`'s existing fork-on-respawn path (`voizecode.mjs`, the `if (liveSessionId)
+  resume = liveSessionId; ... startClaude(true)` line), not a new bug, but it bit repeatedly
+  during the restart above: the same conversation forked id at least three times
+  (`bb20d2aa` → `977a1f0b` → forked again) purely from ordinary reconnect/respawn churn, each
+  fork leaving the previous transcript file behind as dead weight in
+  `~/.claude/projects/<project>/`. The attach fix (#9) only helps for *true* `--bg` sessions;
+  this class of fork — voizecode's own spawned chats — is unaddressed and is the one that
+  actually produces the most orphaned session files day to day.
+- **No way to close a specific chat from outside the app.** Needed to end one specific
+  chat's `claude` child by hand (to free its session id for `cr`/`claude --resume` on the
+  desktop) and there's no CLI for it — had to find the pid via `claude agents --json` /
+  `ps` and signal it directly, which is fragile (the pid changes on every respawn) and
+  doesn't route through voizecode's own `close` handling (relay notified, tab removed
+  client-side, etc.) at all. Worth a `bin/voize-close.mjs <sessionId-or-label>` that sends
+  the same `{t:"close"}` message the app's own close-tab button sends.
+- **`setsid` doesn't exist on macOS.** Tried to use it to detach a relaunch from the process
+  group being killed; it's Linux-only. `bin/voize`'s own `nohup caffeinate -is node ... &`
+  pattern is the portable equivalent — use that, not `setsid`, in any future
+  restart/relaunch scripting for this repo.
+- **`node-pty`'s prebuilt `spawn-helper` loses its executable bit on install** (fixed in #9
+  with a `postinstall` chmod, but flagging here in case it recurs on a machine that installs
+  differently — e.g. via a tarball/CI cache that doesn't preserve the bit at all): every
+  attach fails with a bare `posix_spawnp failed.` and no other clue. If that error ever comes
+  back, check `ls -la laptop/node_modules/node-pty/prebuilds/*/spawn-helper` first.
