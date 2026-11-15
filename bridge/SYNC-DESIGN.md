@@ -50,6 +50,25 @@ on the Mac, and its OpenCode API credential never enters the cloud.
 
 ## Shared Mac service
 
+### Which parts belong to the Agent View program?
+
+Proposed ownership: the existing dashboard/TUI and a new background bridge are
+two processes launched from the same Agent View binary. A future bridge subcommand
+would run under launchd; it is not implemented yet. Both use the same Rust provider
+adapters. The dashboard does not need to remain open for sync or message delivery.
+
+OpenCode is a separate program and owns its API, agent loop, inbox and SQLite DB.
+Litestream and restic are external helper executables supervised by the bridge,
+not libraries we embed into Agent View. Keychain belongs to macOS. The cloud
+Bridge API/MCP, Postgres and R2 are outside the Agent View executable and deployment.
+
+The diagram's arrowheads show payload/data movement, not which side initiates a
+request. The connector initiates both local reads and cloud polling: SQLite rows
+flow back to the connector, and queued messages flow back from the Bridge API.
+Both cloud uploads and message leases/ACKs go through the authenticated Bridge
+API. Neither the phone nor connector opens a direct Postgres connection. The
+backup helpers upload ciphertext to R2 using separate scoped backup credentials.
+
 Extract a SessionRepository and SubmitMessage operation from Agent View's
 provider database/control adapters. The dashboard and a per-user launch agent
 use that shared code. This connector runs without an open dashboard window.
@@ -62,6 +81,11 @@ The submit operation accepts a stable ID and delivery policy; the dashboard can
 retain its current behavior while remote delivery queues for the next turn.
 
 ## A. Incremental approved-session sync
+
+“Session read model” means **shared chat copy**: normalized copies of approved
+message text and metadata in Postgres so ChatGPT can read them while the Mac is
+offline. It is neither another coding agent nor the private full DB backup.
+Agent replies travel back to the phone through this same copy after sync.
 
 1. Enable a specific session locally. Children/forks/other chats/files do not
    inherit approval. No unapproved titles, paths or snippets reach the server.
@@ -149,6 +173,13 @@ turn, like Agent View voice. “Notes” was too narrow. Do not automatically se
 brainstorming or export the whole ChatGPT conversation.
 
 ### Cloud outbox
+
+“Message outbox” means **pending messages**: Postgres rows containing messages
+explicitly addressed to the original OpenCode session but not yet admitted there.
+The connector asks the Bridge API for eligible work, receives a leased message,
+submits it to OpenCode's API, and sends the admission receipt to the Bridge API.
+The API updates the queue status. The connector never injects source SQLite rows
+or edits the OpenCode DB directly.
 
 Validate owner and a distinct write grant. A read-only iPhone tool test is NOT
 proof of mutating-tool eligibility; test this before rollout and describe tool
