@@ -7,7 +7,7 @@
 </defs><g font-family="Inter,-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">
 <rect x="0" y="0" width="1600" height="1020" rx="0" fill="#fff" stroke="#fff" stroke-width="1.5"/>
 <text x="28" y="50" font-size="30" fill="#243247" font-weight="650" text-anchor="start">AgentVoice: what runs where, and what moves</text>
-<text x="28" y="82" font-size="18" fill="#243247" font-weight="650" text-anchor="start">Arrowheads show DATA movement. The Mac initiates its cloud requests and its SQLite reads.</text>
+<text x="28" y="82" font-size="18" fill="#243247" font-weight="650" text-anchor="start">Offline chat history comes from the cloud chat copy. No Mac waking. Backups are optional recovery only.</text>
 <text x="28" y="110" font-size="16" fill="#64748b" font-weight="400" text-anchor="start">PROPOSED. Only the synthetic MCP probe exists; read-only iPhone voice is confirmed.</text>
 <rect x="20" y="147" width="280" height="802" rx="10" fill="#fafbfd" stroke="#b9c4d4" stroke-width="1.5" stroke-dasharray="8 6"/>
 <text x="40" y="181" font-size="21" fill="#243247" font-weight="650" text-anchor="start">IPHONE</text>
@@ -24,7 +24,7 @@
 <rect x="991" y="315" width="242" height="130" rx="5" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="1007" y="346" font-size="20" fill="#284b85" font-weight="650" text-anchor="start">Background bridge</text>
 <text x="1007" y="376" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Reads + uploads DB changes</text>
-<text x="1007" y="400" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Polls API + delivers messages</text>
+<text x="1007" y="400" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Polls while awake; on reconnect</text>
 <text x="992" y="478" font-size="14" fill="#57667b" font-weight="400" text-anchor="start">Runs with the dashboard closed</text>
 <rect x="991" y="509" width="242" height="105" rx="5" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="1007" y="540" font-size="20" fill="#284b85" font-weight="650" text-anchor="start">Dashboard + voice</text>
@@ -56,12 +56,12 @@
 <text x="401" y="700" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Readable while Mac is offline</text>
 <rect x="665" y="615" width="230" height="115" rx="5" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="681" y="646" font-size="20" fill="#2563eb" font-weight="650" text-anchor="start">Pending messages</text>
-<text x="681" y="676" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Cloud outbox: waits for Mac</text>
-<text x="681" y="700" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Message ID · order · status</text>
+<text x="681" y="676" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Saved until Mac retrieves them</text>
+<text x="681" y="700" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">ID · order · delivery status</text>
 <path d="M385,665 L350,665 L350,510 L720,510 L720,445" fill="none" stroke="#007e74" stroke-width="2.4" marker-end="url(#007e74)" marker-start="url(#007e74)"/>
 <text x="518" y="496" font-size="15" fill="#007e74" font-weight="400" text-anchor="start">save / read chats</text>
-<path d="M825,445 L825,615" fill="none" stroke="#2563eb" stroke-width="2.4" marker-end="url(#2563eb)"/>
-<text x="843" y="552" font-size="15" fill="#2563eb" font-weight="400" text-anchor="start">save message</text>
+<path d="M825,445 L825,615" fill="none" stroke="#2563eb" stroke-width="2.4" marker-end="url(#2563eb)" marker-start="url(#2563eb)"/>
+<text x="800" y="549" font-size="14" fill="#2563eb" font-weight="400" text-anchor="end">save / lease next</text>
 <rect x="1310" y="315" width="250" height="130" rx="5" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="1326" y="346" font-size="20" fill="#243247" font-weight="650" text-anchor="start">OpenCode API + agent</text>
 <text x="1326" y="376" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Own process, permissions, files</text>
@@ -81,26 +81,26 @@
 <text x="991" y="944" font-size="13" fill="#64748b" font-weight="400" text-anchor="start">External helper executables, managed by the bridge</text>
 <rect x="991" y="815" width="242" height="115" rx="5" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="1007" y="846" font-size="20" fill="#7c3aed" font-weight="650" text-anchor="start">Backup helpers</text>
-<text x="1007" y="876" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Litestream: local page replica</text>
-<text x="1007" y="900" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">restic: encrypt + upload</text>
+<text x="1007" y="876" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Litestream: captures DB changes</text>
+<text x="1007" y="900" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">restic: backup + encryption</text>
 <rect x="1310" y="815" width="250" height="115" rx="5" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
 <text x="1326" y="846" font-size="20" fill="#7c3aed" font-weight="650" text-anchor="start">Mac Keychain</text>
 <text x="1326" y="876" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Backup encryption secret</text>
 <text x="1326" y="900" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Recovery copy: 1Password</text>
 <rect x="385" y="815" width="510" height="115" rx="5" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
-<text x="401" y="846" font-size="20" fill="#7c3aed" font-weight="650" text-anchor="start">Encrypted DB backup · R2</text>
-<text x="401" y="876" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">First full baseline, then changed data. Cloud has no key.</text>
-<text x="401" y="900" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Restore-only. ChatGPT never reads this backup.</text>
+<text x="401" y="846" font-size="20" fill="#7c3aed" font-weight="650" text-anchor="start">Optional recovery backup · R2</text>
+<text x="401" y="876" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">Full database, encrypted on Mac before upload.</text>
+<text x="401" y="900" font-size="15" fill="#57667b" font-weight="400" text-anchor="start">For a replacement Mac. NOT the API history source.</text>
 <path d="M1435,770 L1435,786 L1112,786 L1112,815" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#7c3aed)"/>
-<text x="1276" y="780" font-size="14" fill="#7c3aed" font-weight="400" text-anchor="middle">Changed WAL pages</text>
+<text x="1276" y="780" font-size="14" fill="#7c3aed" font-weight="400" text-anchor="middle">Changed database blocks</text>
 <path d="M991,870 L895,870" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#7c3aed)"/>
-<text x="943" y="853" font-size="14" fill="#7c3aed" font-weight="650" text-anchor="middle">ciphertext</text>
+<text x="943" y="853" font-size="12" fill="#7c3aed" font-weight="650" text-anchor="middle">encrypted data</text>
 <path d="M1310,870 L1233,870" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#7c3aed)"/>
 <text x="1271" y="853" font-size="14" fill="#7c3aed" font-weight="400" text-anchor="middle">key</text>
 <text x="40" y="531" font-size="15" fill="#64748b" font-weight="650" text-anchor="start">MAC OFFLINE</text>
-<text x="40" y="567" font-size="16" fill="#243247" font-weight="400" text-anchor="start">Discuss last synced context</text>
+<text x="40" y="567" font-size="16" fill="#243247" font-weight="400" text-anchor="start">Read cloud chat copy</text>
 <text x="40" y="599" font-size="16" fill="#243247" font-weight="400" text-anchor="start">Messages stay queued</text>
-<text x="40" y="631" font-size="16" fill="#243247" font-weight="400" text-anchor="start">Agent runs after reconnect</text>
+<text x="40" y="631" font-size="16" fill="#243247" font-weight="400" text-anchor="start">No automatic Mac wake</text>
 <text x="40" y="737" font-size="15" fill="#64748b" font-weight="650" text-anchor="start">PRIVATE BY DEFAULT</text>
 <text x="40" y="771" font-size="16" fill="#243247" font-weight="400" text-anchor="start">Only enabled sessions</text>
 <text x="40" y="799" font-size="16" fill="#243247" font-weight="400" text-anchor="start">are shared with ChatGPT.</text>
@@ -111,5 +111,5 @@
 <text x="263" y="984" font-size="15" fill="#007e74" font-weight="400" text-anchor="start">Readable context</text>
 <path d="M466,979 L505,979" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#7c3aed)"/>
 <text x="517" y="984" font-size="15" fill="#7c3aed" font-weight="400" text-anchor="start">Encrypted backup</text>
-<text x="1570" y="984" font-size="14" fill="#64748b" font-weight="400" text-anchor="end">Phone + connector use the Bridge API, never Postgres directly.</text>
+<text x="1570" y="984" font-size="14" fill="#64748b" font-weight="400" text-anchor="end">Arrows = data movement. Mac initiates polling + SQLite reads.</text>
 </g></svg>
