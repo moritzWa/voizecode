@@ -27,3 +27,6 @@ test/artifacts/
 laptop/package-lock.json
 
 .DS_Store
+
+# Cloudflare local state
+.wrangler/
