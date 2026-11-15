@@ -40,6 +40,8 @@ Tested November 14, 2026 (New York; November 15 UTC).
 | Deployed endpoint, official MCP client | Passed initialization, tool discovery and two distinct proof codes |
 | ChatGPT web custom-server creation | Passed; installed and connected without a paid-plan change or public submission |
 | ChatGPT web text | Returned server time `2026-11-15T03:34:17.773Z` and proof `bd01877b-f3a2-4073-9678-fa0bc1d72138` |
+| ChatGPT browser voice in macOS VM | Passed spoken request, transcription and a fresh MCP tool call. Server time `2026-11-15T05:23:24.315Z`, proof prefix `e35f3701` |
+| ChatGPT native macOS app | Sign-in succeeded, but version `26.1111.21308` stalled on its startup screen before voice was accessible. Not a voice/tool compatibility result |
 | iPhone text | Not tested |
 | iPhone Live voice | Not tested |
 | Mutating tools | Not implemented or tested |
@@ -74,3 +76,29 @@ not an assumed workaround. Stop before building session sync until this is settl
 
 These pages do not establish that a privately added server is callable in iPhone
 Live voice. The device test is the remaining feasibility gate.
+
+## Automated voice experiment (November 15 UTC)
+
+Used `local:mac-for-desktop-testing`, with speaker output muted throughout.
+Installed the official desktop app and BlackHole 2ch for virtual microphone
+loopback. The native app did not progress past startup, including after relaunch.
+The browser experiment is separate evidence, not a substitute native-app pass.
+
+The saved ElevenLabs credential returned HTTP 401. Used macOS `say` instead,
+routed directly to BlackHole. No sound was played on the host. A browser input
+measurement confirmed a nonzero signal on the virtual microphone (peak 0.738).
+
+Spoken request:
+
+> Use Agent Voice Probe to check the connection now. Call its get session status
+> tool. Tell me the new server time and the first eight characters of the proof
+> code. Do not repeat the previous result.
+
+ChatGPT transcribed that request, displayed “Retrieved synthetic session status”,
+then returned the fresh server time and proof prefix recorded above. The voice
+response also read the result aloud. The browser used the `/realtime/wm` route.
+This proves a real browser voice-to-MCP path, not dictation followed by a manually
+sent text prompt. The voice call was ended after the result.
+
+No private sessions were synced. No real OpenCode API, database, or credentials
+were connected to the probe. Native-app and iPhone voice support remain unproven.

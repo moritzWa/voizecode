@@ -28,7 +28,14 @@ Store a scoped, versioned read model:
 - Context: selected project instructions and bounded snapshots with capture time.
 - Outbox: owner, target, client request ID, sequence, payload, kind and status.
 
-Start with recent conversations. Do not upload every repository file, tool output,
+Share nothing by default. OpenCode includes highly private personal chats, not
+just coding sessions. Require explicit per-session opt-in on the Mac before any
+upload, including titles, snippets, search results and project paths. “Recent” is
+not permission to share. Unapproved sessions must be absent from every remote
+list, search, read, export and context endpoint. Enforce that scope in code and
+test cross-session access; do not rely on model prompts or secret-looking IDs.
+
+For approved conversations, do not upload every repository file, tool output,
 environment variable or credential. Strip known secrets, skip private file types
 and keep a deliberate context allowlist. Conversation text can itself contain
 secrets, so authentication and retention/deletion controls precede real uploads.
@@ -61,6 +68,19 @@ Extract the provider-facing operations into a Rust service/library usable withou
 an open dashboard. Agent View supplies its dashboard adapter; a small Mac connector
 supplies the outbound cloud adapter. MCP and a future mobile app call the same
 cloud contracts. Keep the cloud transport thin.
+
+Private reads need owner-bound OAuth and server-side authorization on every
+object. Pair each Mac separately, issue scoped revocable credentials, and keep
+read, note and execution permissions separate. Do not put credentials in URLs.
+Do not log chat bodies, tool payloads, tokens or private session metadata in
+analytics, traces or crash reports. Define expiry, revocation and deletion,
+including the limits of backup retention, before enabling uploads.
+
+Selected context must be readable by ChatGPT to discuss it. Encryption at rest
+does not hide data from a backend that holds the decryption key, nor from OpenAI
+after a tool returns it. Do not call that end-to-end encryption. Keep the most
+private chats outside this bridge. Do not connect or upload actual conversations
+without explicit approval of that data flow.
 
 Do not expose every current voice tool remotely. Start with list/read/context and
 explicit note queueing. Interrupt, edit, close and execute are different powers.
