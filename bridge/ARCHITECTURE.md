@@ -1,5 +1,9 @@
 # Bridge design after the client feasibility gate
 
+**Detailed replacement:** [SYNC-DESIGN.md](SYNC-DESIGN.md) resolves incremental
+storage, local encryption and real message delivery. [architecture.svg](architecture.svg)
+is the visual map. The owner has confirmed the read-only iPhone Live voice probe.
+
 This is a proposal, not implemented session sync. The harmless MCP probe is the
 only deployed part. Keep VoiceCode's existing relay and clients unchanged for now.
 

@@ -43,7 +43,7 @@ Tested November 14, 2026 (New York; November 15 UTC).
 | ChatGPT browser voice in macOS VM | Passed spoken request, transcription and a fresh MCP tool call. Server time `2026-11-15T05:23:24.315Z`, proof prefix `e35f3701` |
 | ChatGPT native macOS app | Sign-in succeeded, but version `26.1111.21308` stalled on its startup screen before voice was accessible. Not a voice/tool compatibility result |
 | iPhone text | Not tested |
-| iPhone Live voice | Not tested |
+| iPhone Live voice | Owner-confirmed pass; fresh proof matched (first/last characters checked) |
 | Mutating tools | Not implemented or tested |
 
 Web test chat: <https://chatgpt.com/c/6af92823-f4e0-83ea-b32d-9b36ca342bc6>.
@@ -61,7 +61,8 @@ Web test chat: <https://chatgpt.com/c/6af92823-f4e0-83ea-b32d-9b36ca342bc6>.
 
 Do not infer iPhone support from the web result. Do not infer custom-app support
 from support for public directory apps. Publication is a separate experiment,
-not an assumed workaround. Stop before building session sync until this is settled.
+not an assumed workaround. The owner has now confirmed the read-only Live voice
+path on iPhone. Authenticated access and mutating tools remain separate gates.
 
 ## Documentation checked
 
@@ -75,7 +76,9 @@ not an assumed workaround. Stop before building session sync until this is settl
   documents public HTTPS Streamable HTTP and the Plugins custom-server workflow.
 
 These pages do not establish that a privately added server is callable in iPhone
-Live voice. The device test is the remaining feasibility gate.
+Live voice. The owner has since confirmed this read-only device test. Authenticated
+access and mutating tools remain separate gates. See [the detailed sync design](SYNC-DESIGN.md)
+and [visual architecture](architecture.svg).
 
 ## Automated voice experiment (November 15 UTC)
 
@@ -101,4 +104,5 @@ This proves a real browser voice-to-MCP path, not dictation followed by a manual
 sent text prompt. The voice call was ended after the result.
 
 No private sessions were synced. No real OpenCode API, database, or credentials
-were connected to the probe. Native-app and iPhone voice support remain unproven.
+were connected to the probe. Native-app voice remains unproven. The owner later
+confirmed the iPhone read-only Live voice path separately.
