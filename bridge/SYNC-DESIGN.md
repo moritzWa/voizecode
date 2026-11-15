@@ -32,6 +32,38 @@ conversation bodies were read/uploaded, messages sent, or live DB settings chang
 
 ## Architecture and trust boundaries
 
+### Offline history is a product requirement, not disaster recovery
+
+The bridge API reads the approved chat copy in Postgres whether the Mac is awake,
+asleep, disconnected or permanently lost. This copy persists independently of
+the Mac. It contains only successfully synced, approved context, not unsynced
+changes or every private session. It is the cloud-accessible history the owner
+needs. It should have normal database backup/retention of its own.
+
+The encrypted full-DB R2 backup is a separate OPTIONAL disaster-recovery feature,
+not a prerequisite for offline discussion. Defer it until the core chat sync and
+message delivery work. It preserves otherwise-unshared/private local sessions
+for restoration onto a replacement Mac. Its decryption secret never lives in the
+bridge service, so the API deliberately cannot use it as a fallback history store.
+Letting that API decrypt the entire backup would expose all private chats to the
+service and change the agreed privacy boundary. Do not make that change implicitly.
+
+There is no automatic Mac wake in this design. The connector runs while the Mac
+is awake and has a user session; launchd does not bypass sleep or FileVault login.
+During normal operation it holds a ~25-second outbound long-poll to the Bridge
+API. On reconnect it catches up source revisions, then asks for eligible pending
+messages. The API reads/leases the head queue row and returns it to the connector;
+the connector submits it to OpenCode and returns an admission receipt. If the Mac
+never returns, those instructions cannot execute there. They expire; restoration
+and re-pairing require deliberate action, not automatic replay on a new machine.
+
+Plain terms: SQLite's WAL (write-ahead log) is its on-disk journal of database
+changes, written before they are folded into the main DB file. It is not a cloud
+message queue. Litestream captures those changes for recovery. Restic is an
+existing backup program that avoids re-uploading identical chunks and encrypts
+the backup locally. “Ciphertext” just means encrypted data. These implementation
+terms should not be required to read the system diagram.
+
 | Flow | Local source | Cloud storage | ChatGPT can read? |
 | --- | --- | --- | --- |
 | Disaster recovery | Entire SQLite DB, private rows included | Encrypted restic repository in private R2 | No |
