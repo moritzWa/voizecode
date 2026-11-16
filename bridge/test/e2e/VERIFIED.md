@@ -109,4 +109,21 @@ false even after the new reply appeared. A follow-up adds an explicit `page_kind
 field because the client over-explained the former `no_newer_messages: false`.
 
 These are transport and native-state checks, not a new iPhone Live verification.
-The phone's original implementation operation was not resent or marked delivered.
+Agent View PR #61 (repair mobile queue context and expose native session states)
+then passed all CI checks, merged as `9ac9c22`, and was installed. The independent
+personal login daemon was restarted and its executable path and inode matched
+the installed binary. The authenticated ChatGPT client then made exactly two
+status calls, without reading histories: `needs_you` and `all`. Both returned
+`status_fresh: true`, `partial: false`, `mac_seen_recently: true`. Its receipt
+check returned `accepted`, `reply_available: true`, `completion_confirmed: true`
+and `recipient_status: done` for the new synthetic instruction.
+
+The phone's original implementation operation was never delivered or resent.
+After its requested changes shipped, ChatGPT cancelled only that obsolete blocked
+operation and checked its final `cancelled` state. An independent backend read
+confirmed it. The original receipt and body remain available for audit; the old
+operation no longer blocks later instructions to that session.
+
+The temporary personal-Mac test session was deleted through the native API and
+its normal history deletion synced. VM services, the VM and test browsing were
+stopped; only the intended production connector remains running.
