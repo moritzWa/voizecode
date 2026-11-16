@@ -4,6 +4,28 @@ November 15, 2026. Proposed design, not deployed. Supersedes the earlier outline
 Only the fake-data MCP probe exists. Its read-only tool is confirmed working in
 iPhone Live voice by the owner. Authenticated and mutating tools remain untested.
 
+## Current scope update (supersedes older choices below)
+
+The owner chose **all sessions, all dates, visible user/assistant text only**.
+No per-session selection or 30-day restriction is required. Keep IDs, ordering,
+timestamps, titles and revert visibility; do not sync tools, tool outputs, hidden
+reasoning, attachments, arbitrary metadata or raw source JSON. Session-level
+revocation can remain a security control, not a mandatory selection workflow.
+
+Local current-V2 measurement: ~38 MB visible text, ~49 MB with compact metadata,
+not the entire 29 GB database. Legacy-only/inherited fork coverage and actual PG
+index overhead still need validation. Aim for Workers Free + Neon Free, rather
+than Fly. Storage looks plausible; compute/CPU/network quotas remain test gates.
+Avoid history requests when no changes exist and avoid waking Postgres on idle
+message polls. Full encrypted R2 recovery is **deferred, separate from this project**.
+
+The protocol/storage first slice now exists under [sync/](sync/README.md) and is
+tested locally with synthetic fixtures. It does not yet include Google/MCP OAuth,
+the Agent View Rust daemon, deployed Neon, or remote message delivery. The public
+MCP probe is unchanged and never imports the private sync code. No real history
+was uploaded by this implementation change. Treat the older design sections as
+background/invariants, not an up-to-date rollout checklist or feature status.
+
 ## Verified against the installed V2 contract
 
 - `opencode-dev debug paths db` resolves the active SQLite DB to

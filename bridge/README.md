@@ -106,3 +106,11 @@ sent text prompt. The voice call was ended after the result.
 No private sessions were synced. No real OpenCode API, database, or credentials
 were connected to the probe. Native-app voice remains unproven. The owner later
 confirmed the iPhone read-only Live voice path separately.
+
+## Text-only sync implementation
+
+The first protocol/storage slice is in [sync/](sync/README.md), with synthetic
+PostgreSQL and durable-client tests. It is not deployed or connected to the public
+probe. Current scope is all dates, user/assistant visible text only; full database
+backups are deferred. Google/MCP OAuth and Agent View integration remain rollout
+gates. See the scope update in [SYNC-DESIGN.md](SYNC-DESIGN.md).
