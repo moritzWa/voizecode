@@ -19,7 +19,7 @@ export async function sendPending({ journal, fetch: transport = fetch, endpoint,
   if (!response.ok) throw new SyncError(response.status === 409 ? 'sync_conflict' : 'sync_upload_failed', response.status);
   let receipt;
   try { receipt = await response.json(); } catch { throw new SyncError('invalid_sync_receipt', 502); }
-  const committed = batch.kind === 'delta' || batch.complete;
+  const committed = batch.upload_id !== undefined ? batch.complete : true;
   if (receipt.batch_id !== batch.batch_id || receipt.session_id !== batch.session_id || receipt.committed !== committed
     || receipt.through !== (committed ? batch.through : null)
     || receipt.next_chunk !== (committed ? null : batch.chunk + 1)) throw new SyncError('invalid_sync_receipt', 502);
