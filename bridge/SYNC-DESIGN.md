@@ -1,5 +1,10 @@
 # AgentVoice: storage, diff sync and message delivery
 
+**Historical design:** the implementation and current setup now live in
+[agentview/bridge](https://github.com/moritzWa/agentview/tree/main/bridge).
+The source move does not change the deployed service. The notes below record
+the earlier design and rollout.
+
 Updated November 16, 2026. The private backend is deployed and the Agent View
 connector has passed the cloud/Cua round trip. Actual ChatGPT authenticated text
 reads and approved writes work. The owner confirmed private iPhone Live on

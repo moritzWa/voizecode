@@ -109,7 +109,8 @@ confirmed the iPhone read-only Live voice path separately.
 
 ## Text-only sync implementation
 
-The separate [private bridge](private/README.md) is deployed on Workers/Neon Free.
+The separate [private bridge](https://github.com/moritzWa/agentview/tree/main/bridge)
+has moved to Agent View. It is deployed on Workers/Neon Free.
 It includes Google/MCP OAuth, device pairing, bounded history tools, queued
 messages and the Agent View login daemon. It never shares private code or data
 with the public probe. Scope is all dates and sessions, visible user/assistant
