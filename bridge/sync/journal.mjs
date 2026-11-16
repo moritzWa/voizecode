@@ -33,7 +33,9 @@ export class LocalJournal {
     }
     const prior = this.lastReceipt(batch.session_id);
     if (batch.kind === 'delta') {
-      if (!prior?.committed || prior.through !== batch.from) throw new SyncError('local_cursor_gap');
+      if (batch.chunk && !prior?.committed) {
+        if (prior?.next_chunk!==batch.chunk) throw new SyncError('local_cursor_gap');
+      } else if (!prior?.committed || prior.through !== batch.from) throw new SyncError('local_cursor_gap');
     } else if (prior?.committed || batch.chunk !== (prior?.next_chunk ?? 0)) {
       throw new SyncError('local_baseline_conflict');
     }
@@ -47,7 +49,7 @@ export class LocalJournal {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const batch = await this.pending();
-      const committed = batch?.kind === 'delta' || batch?.complete;
+      const committed = batch?.upload_id !== undefined ? batch?.complete : true;
       if (!batch || batch.batch_id !== id || receipt.batch_id !== id || receipt.session_id !== batch.session_id
         || receipt.committed !== committed || receipt.through !== (committed ? batch.through : null)
         || receipt.next_chunk !== (committed ? null : batch.chunk + 1)) throw new SyncError('invalid_sync_receipt', 502);

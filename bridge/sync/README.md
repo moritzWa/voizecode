@@ -1,8 +1,8 @@
 # Text-only sync core
 
-Implemented locally. **Not deployed, not connected to OpenCode, and not reachable
-through the public MCP probe.** This is the protocol/storage first slice, not the
-complete Google/OAuth/Agent View integration.
+The core is deployed through the separate [private Worker](../private/README.md).
+Agent View provides the production Rust source reader, journal and login daemon.
+The public MCP probe remains synthetic and never imports this code.
 
 ## Scope
 
@@ -17,7 +17,7 @@ V2 projection only, not inherited fork rendering, legacy-only sessions or actual
 Postgres index/storage size. It is an estimate, not a proof of full-history coverage.
 
 The OpenCode DB is authoritative. Postgres receives only connector-projected
-history. Phone instructions belong in a separate future outbox, never optimistic
+history. Phone instructions belong in the separate private outbox, never optimistic
 inserts into the mirrored conversation. Full-DB recovery backups are deferred
 and out of scope. Prefer Workers Free + Neon Free, subject to CPU/quota tests.
 
@@ -74,9 +74,8 @@ Reads and literal per-session searches both filter that boundary. Clearing it
 restores visibility of retained rows. Committed source deletion emits tombstones.
 Already-returned ChatGPT text cannot be recalled by reverting locally.
 
-Session reads return a maximum of 100 messages and support source-order pagination
-and literal substring search. This is NOT a finished global full-text index or
-MCP tool suite. Payload/context budgets and broader search are rollout work.
+Core session reads return at most 100 messages. The private MCP layer adds global
+Postgres full-text search, smaller response budgets and paginated message text.
 
 ## Testing
 
@@ -91,26 +90,25 @@ failed local checkpoint, journal reopen, file permissions, unsafe source-file
 refusal, HTTP size/validation limits, and no idle history requests. Existing probe
 tests prove the public tool surface still exposes synthetic data only.
 
-## Gates still required before real history upload
+## Integration status and remaining limits
 
-1. Google owner authentication, MCP OAuth code/PKCE flow and device pairing with
-   short-lived/revocable credentials. Opaque test credentials are not a substitute.
-2. A deployed private Workers/Neon adapter and migrations, rate limits, bounded
-   query/context cost, least-privilege DB roles and full owner isolation tests.
-   No cloud database was provisioned by this change.
-3. Shared Agent View Rust source adapter: consistent snapshot + watermark,
-   incremental event mapping, inherited forks, imported legacy history, compaction,
-   revert boundary resolution, split-part feature detection, deletions and cursor
-   gap/restore handling. Do not silently claim the simple projector covers these.
-4. Login launch-agent lifecycle, reconnect/backoff and baseline recovery. History
-   sync must not wake Neon while idle. Message polling needs a separate design
-   that does not keep querying Neon on every idle poll; do not solve that with an
-   unreliable per-Worker in-memory queue.
-5. iPhone authenticated read test, then separate message-outbox/write eligibility,
-   expiry, duplicate admission and permission-gate tests. The text-sync receipts
-   implemented here are NOT receipts for coding-agent execution.
-6. Synthetic leak canaries and malicious-history prompt-injection tests, runtime
-   CPU/storage/compute measurements and owner-approved real-data enablement.
+Owner Google login, MCP code/PKCE OAuth, revocation, device pairing, a private
+Workers/Neon deployment and a separate instruction outbox are implemented.
+The Rust daemon reuses Agent View's profile resolver and shared supervisor.
+Its source reader supports inline/split V2 text and unmigrated legacy sessions.
+Missing event-body ranges reconcile a current source snapshot. Database identity
+changes and regressed watermarks fail closed. Native fork, revert/unrevert and
+background/offline delivery passed the deployed Cua VM harness.
+
+ChatGPT's actual authenticated text client has searched synthetic history and
+sent a message into the VM's real OpenCode service after write approval.
+Authenticated iPhone Live voice still needs its own device check. The synthetic
+read-only probe's earlier Live success is not proof of private write eligibility.
+
+Unattended credential renewal beyond the connector's 90-day lifetime, automatic
+abandoned-staging/receipt cleanup and explicit source-generation replacement are
+not implemented. Real storage/compute usage must be measured after initial sync.
+The Node journal is an integration fixture, not the production source reader.
 
 Remote wake is a separate best-effort enhancement: this Mac reports wireless
 wake support and enables network wake on AC, but no tested LAN relay exists.

@@ -91,6 +91,19 @@ test('failed DB write rolls back every row, cursor and receipt', async () => {
   assert.equal((await db.query('SELECT count(*)::int AS n FROM av_receipts WHERE batch_id=$1', [invalid.batch_id])).rows[0].n, 0);
 });
 
+test('large delta chunks remain hidden and do not advance the cursor until final commit',async()=>{
+  await store.apply(writer,batch('delta-chunks',{messages:[msg('old',1),msg('keep',2)]}));
+  const first=delta('delta-chunks',10,20,{upload_id:'delta-upload',chunk:0,complete:false,messages:[msg('new',1)],delete_ids:['old']});
+  // delta() intentionally strips chunk fields for simple test cases; add them explicitly.
+  Object.assign(first,{upload_id:'delta-upload',chunk:0,complete:false});
+  const ack=await store.apply(writer,first);assert.equal(ack.committed,false);
+  const interim=await store.read(reader,'delta-chunks');assert.equal(Number(interim.cursor),10);assert.equal(interim.messages[0].message_id,'old');
+  const last={...first,batch_id:'delta-last',chunk:1,complete:true,messages:[msg('keep',2,'Updated')],delete_ids:[]};
+  await store.apply(writer,last);
+  const final=await store.read(reader,'delta-chunks');assert.equal(Number(final.cursor),20);assert.deepEqual(final.messages.map(m=>m.message_id),['new','keep']);assert.equal(final.messages[1].text,'Updated');
+  assert.deepEqual(await store.apply(writer,first),ack);
+});
+
 test('owner/device/DB epoch scopes cannot read another source; forks stay separate', async () => {
   await store.apply(writer, batch('fork-parent')); await store.apply(writer, batch('fork-child'));
   for (const patch of [{ owner_id: 'stranger' }, { device_id: 'other' }, { database_epoch: 'old' }]) {

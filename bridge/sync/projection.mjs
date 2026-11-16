@@ -23,7 +23,10 @@ export const Batch = z.object({
   const fail = () => ctx.addIssue({ code: 'custom', message: 'invalid_batch' });
   if (b.kind === 'baseline') {
     if (!b.upload_id || b.chunk === undefined || b.complete === undefined || b.from !== 0 || b.delete_ids.length) fail();
-  } else if (b.upload_id !== undefined || b.chunk !== undefined || b.complete !== undefined || b.through <= b.from) fail();
+  } else {
+    if (b.through <= b.from) fail();
+    if ([b.upload_id,b.chunk,b.complete].some(v=>v!==undefined) && (!b.upload_id || b.chunk===undefined || b.complete===undefined)) fail();
+  }
   const ids = b.messages.map(m => m.id);
   if (new Set(ids).size !== ids.length || new Set(b.delete_ids).size !== b.delete_ids.length || ids.some(i => b.delete_ids.includes(i))) fail();
   if (b.session.deleted && (b.messages.length || b.delete_ids.length)) fail();
