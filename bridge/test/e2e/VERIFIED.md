@@ -77,3 +77,27 @@ Local coverage includes inline/split text, legacy-only sessions, source cursor
 gap reconciliation, revert resolution, hidden reasoning/tool metadata, crash-safe
 batch replay, chunked deltas, rollback, stale-context sends, cancellation, expiry,
 uncertain admission and owner/device isolation.
+# Real phone workflow repair, November 16, 2026
+
+The initial rollout checks did not prove the user's workflow. The real ChatGPT
+conversation exposed missing native status metadata, cursor/offset confusion,
+and an instruction that reached `needs_confirmation` instead of OpenCode. The
+Mac was asleep; an appended desktop turn later invalidated the old strict cursor
+check. A cloud `queued` receipt was not proof of delivery.
+
+Candidate Worker version `756a6d27-a784-4611-b623-600567980706` passed a new
+deployed-cloud/macOS-Cua regression with real OpenCode and a local fixture model:
+
+- A phone send based on an older mirrored read survived an appended desktop turn.
+  Native admission, a later reply and a completed native state matched its input ID.
+- Retrying the operation left exactly one native user input.
+- A native revert still stopped admission with `needs_confirmation`.
+- One `list_sessions(status="needs_you")` call found an actual native approval.
+- The personal primary source stayed unchanged throughout the fixture run.
+
+The reconnect test also exposed stale registration handling after a VM reboot.
+The candidate connector now verifies and adopts the live replacement service.
+Backend tests: 30 passed. Agent View library tests: 948 passed, 7 ignored.
+
+These are transport and native-state checks, not a new iPhone Live verification.
+The phone's original implementation operation was not resent or marked delivered.

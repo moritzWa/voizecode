@@ -49,3 +49,4 @@ CREATE TABLE IF NOT EXISTS av_outbox (
   PRIMARY KEY (owner_id,device_id,database_epoch,operation_id)
 );
 CREATE INDEX IF NOT EXISTS av_outbox_pending ON av_outbox(owner_id,device_id,database_epoch,state,sequence);
+ALTER TABLE av_outbox ADD COLUMN IF NOT EXISTS context_guard jsonb;

@@ -99,9 +99,10 @@ export class SyncStore {
   }
 
   /** No search/reader API can see incomplete baselines or undone messages. */
-  async read(principal, sessionId, { query = '', after = -1, limit = 50 } = {}) {
+  async read(principal, sessionId, { query = '', after = -1, before = Number.MAX_SAFE_INTEGER, tail = false, limit = 50 } = {}) {
     if (principal.audience !== 'read') throw new SyncError('forbidden', 403);
     if (typeof query !== 'string' || query.length > 200 || !Number.isSafeInteger(after) || after < -1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new SyncError('invalid_read', 400);
+    if(!Number.isSafeInteger(before)||before<0||typeof tail!=='boolean')throw new SyncError('invalid_read',400);
     const sk = [...key(principal), sessionId];
     // Literal substring match, NOT SQL LIKE patterns. Returned rows remain source ordered.
     // One statement means the revert boundary and message rows share one MVCC snapshot.
@@ -109,15 +110,15 @@ export class SyncStore {
       COALESCE((SELECT jsonb_agg(x ORDER BY x.message_order) FROM (
         SELECT message_id,role,message_order,text,created_at,updated_at FROM av_messages m
         WHERE m.owner_id=s.owner_id AND m.device_id=s.device_id AND m.database_epoch=s.database_epoch
-        AND m.session_id=s.session_id AND m.generation=s.generation AND m.message_order>$5
+        AND m.session_id=s.session_id AND m.generation=s.generation AND m.message_order>$5 AND m.message_order<$10
         AND ((s.state->>'visible_before') IS NULL OR m.message_order<(s.state->>'visible_before')::bigint)
         AND ($6='' OR strpos(lower(m.text),lower($6))>0)
-        ORDER BY m.message_order LIMIT $7
+        ORDER BY m.message_order ${tail?'DESC':'ASC'} LIMIT $7
       ) x),'[]'::jsonb) AS messages FROM av_sessions s
       WHERE ${sessionPredicate} AND cursor IS NOT NULL AND (state->>'deleted')::boolean=false
       AND EXISTS (SELECT 1 FROM av_credentials c WHERE c.token_hash=$8 AND c.owner_id=s.owner_id
         AND (c.device_id=s.device_id OR c.device_id='*') AND (c.database_epoch=s.database_epoch OR c.database_epoch='*') AND c.audience='read'
-        AND c.revoked=false AND c.expires_at>$9)`, [...sk, after, query, limit, principal.token_hash, Date.now()]);
+        AND c.revoked=false AND c.expires_at>$9)`, [...sk, after, query, limit, principal.token_hash, Date.now(),before]);
     if (!result.rows.length) throw new SyncError('session_not_found', 404);
     return result.rows[0];
   }

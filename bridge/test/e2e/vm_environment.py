@@ -4,8 +4,8 @@ Run ONLY in the macOS Cua VM. All processes end after 45 minutes or explicit sto
 import base64,json,os,pathlib,signal,subprocess,sys,threading,time,urllib.request
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 
-ROOT=pathlib.Path('/Users/lume/agentvoice-e2e-20261116')
-WORK=ROOT/'work';PORT=31741;MODEL_PORT=31742
+ROOT=pathlib.Path(os.environ.get('AGENTVOICE_FIXTURE_ROOT','/Users/lume/agentvoice-e2e-20261116'))
+WORK=ROOT/'work';PORT=int(os.environ.get('AGENTVOICE_FIXTURE_PORT','31741'));MODEL_PORT=int(os.environ.get('AGENTVOICE_MODEL_PORT','31742'))
 PASSWORD='disposable-agentvoice-loopback-only'
 
 def api(path,body=None,method=None):
@@ -48,7 +48,8 @@ def serve():
     (ROOT/'config'/'opencode.json').write_text(json.dumps(config))
     wrapper=ROOT/'opencode'
     variables={'XDG_CONFIG_HOME':str(ROOT/'config-home'),'OPENCODE_CONFIG_DIR':str(ROOT/'config'),'XDG_DATA_HOME':str(ROOT/'data'),'XDG_CACHE_HOME':str(ROOT/'cache'),'XDG_STATE_HOME':str(ROOT/'state'),'OPENCODE_DB':str(ROOT/'data'/'opencode'/'history-v1.db'),'BRIDGE_TEST_API_KEY':'fixture-no-real-key'}
-    wrapper.write_text('#!/bin/sh\n'+''.join("export %s='%s'\n"%(k,v) for k,v in variables.items())+'exec /Users/lume/agentvoice-opencode-v2-test "$@"\n');wrapper.chmod(0o700)
+    native=os.environ.get('AGENTVOICE_TEST_NATIVE_OPENCODE','/Users/lume/agentvoice-opencode-v2-test')
+    wrapper.write_text('#!/bin/sh\n'+''.join("export %s='%s'\n"%(k,v) for k,v in variables.items())+"exec '"+native.replace("'","'\\''")+"' \"$@\"\n");wrapper.chmod(0o700)
     model=ThreadingHTTPServer(('127.0.0.1',MODEL_PORT),Model)
     threading.Thread(target=model.serve_forever,daemon=True).start()
     log=open(ROOT/'opencode.log','ab')
@@ -59,7 +60,7 @@ def serve():
         try:os.killpg(child.pid,signal.SIGTERM)
         except ProcessLookupError:pass
         model.shutdown();raise SystemExit()
-    signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
+    signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop);signal.signal(signal.SIGHUP,stop)
     deadline=time.monotonic()+45*60
     while child.poll() is None and time.monotonic()<deadline:time.sleep(1)
     stop()

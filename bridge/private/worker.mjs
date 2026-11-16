@@ -6,6 +6,7 @@ import { privateMcp } from './mcp.mjs';
 import { SyncStore } from '../sync/store.mjs';
 import { privateHandler } from '../sync/http.mjs';
 import { digest, SyncError } from '../sync/projection.mjs';
+import { RuntimeSnapshot } from './runtime.mjs';
 export { WakeGate } from './gate.mjs';
 
 const AUTH_PATHS=new Set(['/register','/authorize','/token','/revoke','/pair/start','/pair/token','/pair','/consent','/auth/google/callback']);
@@ -36,6 +37,13 @@ export function application({database=openDatabase}={}) {
         if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new SyncError('unauthorized',401);
         const value=path.endsWith('/checked')?await gate.checked(await digest(token)):await gate.poll(await digest(token));
         return json({pending:value.pending,generation:value.generation,active_until:value.active_until}); // No Neon query.
+      }
+      if(path==='/v1/connector/runtime' && request.method==='POST') {
+        if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new SyncError('unauthorized',401);
+        request=await bounded(request,850_000);
+        const parsed=RuntimeSnapshot.safeParse(await request.json());
+        if(!parsed.success)throw new SyncError('invalid_runtime_snapshot',400);
+        await gate.setRuntime(await digest(token),parsed.data);return json({ok:true});
       }
       if(AUTH_PATHS.has(path)) {
         const ip=request.headers.get('cf-connecting-ip')??'local';
