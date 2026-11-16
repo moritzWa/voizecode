@@ -103,14 +103,16 @@ response also read the result aloud. The browser used the `/realtime/wm` route.
 This proves a real browser voice-to-MCP path, not dictation followed by a manually
 sent text prompt. The voice call was ended after the result.
 
-No private sessions were synced. No real OpenCode API, database, or credentials
-were connected to the probe. Native-app voice remains unproven. The owner later
+No private sessions were synced by the probe. No real OpenCode API, database, or
+credentials were connected to it. macOS native-app voice remains unproven. The owner later
 confirmed the iPhone read-only Live voice path separately.
 
 ## Text-only sync implementation
 
-The first protocol/storage slice is in [sync/](sync/README.md), with synthetic
-PostgreSQL and durable-client tests. It is not deployed or connected to the public
-probe. Current scope is all dates, user/assistant visible text only; full database
-backups are deferred. Google/MCP OAuth and Agent View integration remain rollout
-gates. See the scope update in [SYNC-DESIGN.md](SYNC-DESIGN.md).
+The separate [private bridge](private/README.md) is deployed on Workers/Neon Free.
+It includes Google/MCP OAuth, device pairing, bounded history tools, queued
+messages and the Agent View login daemon. It never shares private code or data
+with the public probe. Scope is all dates and sessions, visible user/assistant
+text only. The owner confirmed private iPhone Live and enabled personal-history
+sync. See [verification evidence](test/e2e/VERIFIED.md). Full database backups and
+wireless wake are separate projects; sustained Free-tier quotas remain monitored.

@@ -71,7 +71,11 @@ exchange, actual OpenCode history projection, tool-output canary exclusion,
 remote admission and reply sync, retry deduplication, revert/unrevert, forks,
 dashboard-independent login-item delivery, offline queueing, refresh rotation and
 revocation. Actual authenticated ChatGPT text search and approved send/reply have
-also passed. Private iPhone Live voice still requires its own device check.
+also passed. The owner confirmed private iPhone Live, and its synthetic phone
+test reached the outbox. Personal-history sync is now enabled: the initial
+snapshot committed 2,608 sessions and 72,252 messages. An authenticated MCP read
+matched source-visible text exactly without logging it. The login daemon runs
+independently of the dashboard and retains shared V2 service discovery.
 
 Backend queries can read copied text. OpenAI sees retrieved content. Logs exclude
 request bodies, SQL, credentials and URLs with codes. The source database and

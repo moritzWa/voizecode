@@ -36,13 +36,30 @@ This check caught a browser-only issue that the same-origin integration callback
 did not: the consent page's form-action CSP blocked its redirect to ChatGPT.
 The policy now permits the already-allowlisted ChatGPT callback origin.
 
+## iPhone confirmation and personal-history rollout
+
+The owner confirmed the private iPhone Live check on November 16. The backend
+independently recorded its `PhoneTest_20261116_0939` operation queued against the
+offline disposable VM. This verifies private write-tool eligibility, not execution
+of that particular queued test. The earlier VM harness already proved admission
+and reply sync using the same transport.
+
+After confirmation, the personal Mac paired through Google owner consent. Its
+initial upload committed 2,608 sessions and 72,252 visible messages (38,307,859
+text bytes). Local and cloud counts matched with no unacknowledged batches.
+Database size was 116,178,944 bytes at that point. An authenticated read-only
+MCP grant listed real history and returned an exact source-message hash match.
+No personal chat bodies were logged by the verifier.
+
+The native login item is running with shared V2 service-discovery settings.
+Closing the dashboard does not stop it. A first-day Free-tier usage review is
+scheduled; this is not a claim of sustained monthly quota compliance.
+
 ## Not claimed
 
-- Authenticated private tools in iPhone Live voice. The older synthetic read-only
-  probe passed on the owner's actual iPhone, but it has a different tool surface.
 - Live voice audio in this VM. A fake-microphone run opened voice mode but did
   not produce a new transcribed turn, so it is not evidence of a voice tool call.
-- Full personal history rollout, monthly quota compliance or wireless remote wake.
+- Sustained monthly quota compliance or wireless remote wake.
 - Native permission bypass. The connector does not alter permission rules.
 
 ## Full local source audit, without upload
@@ -50,7 +67,8 @@ The policy now permits the already-allowlisted ChatGPT callback origin.
 The Rust source reader projected all 2,609 local sessions: 72,221 visible
 messages and 38,285,538 UTF-8 text bytes. The largest encoded message was
 761,406 bytes, within the 850 KB connector batch budget. No personal text left
-the Mac. This audit caught an overly small 500K-character message limit; the
+the Mac during that pre-rollout audit. It caught an overly small 500K-character
+message limit; the
 protocol now accepts up to one million characters, still subject to its 1 MB
 request-byte limit. The production reader and backend have a matching large-paste
 regression test. Long-message pagination also preserves Unicode character offsets.

@@ -2,7 +2,8 @@
 
 Updated November 16, 2026. The private backend is deployed and the Agent View
 connector has passed the cloud/Cua round trip. Actual ChatGPT authenticated text
-reads and approved writes work. Private iPhone Live voice is still a device gate.
+reads and approved writes work. The owner confirmed private iPhone Live on
+November 16, and its synthetic test operation reached the outbox.
 
 ## Current scope update (supersedes older choices below)
 
@@ -23,7 +24,8 @@ message polls. Full encrypted R2 recovery is **deferred, separate from this proj
 The [private backend](private/README.md) now includes Google/MCP OAuth, pairing,
 Neon, bounded history tools and a separate message queue. Agent View has a Rust
 reader/journal and login daemon. [Verification evidence](test/e2e/VERIFIED.md)
-covers the deployed synthetic tests. No personal history has been uploaded. The
+covers the deployed tests and rollout. After iPhone confirmation, the personal
+Mac synced its history and enabled its dashboard-independent login daemon. The
 public probe remains separate. Older sections below are design background, not
 the rollout checklist. Encrypted backups and wireless wake remain separate.
 

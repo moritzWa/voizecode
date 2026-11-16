@@ -102,8 +102,11 @@ background/offline delivery passed the deployed Cua VM harness.
 
 ChatGPT's actual authenticated text client has searched synthetic history and
 sent a message into the VM's real OpenCode service after write approval.
-Authenticated iPhone Live voice still needs its own device check. The synthetic
-read-only probe's earlier Live success is not proof of private write eligibility.
+The owner separately confirmed authenticated iPhone Live. Its synthetic phone
+operation reached the outbox. Personal-history rollout followed that gate; an
+authenticated cloud read matched the source text exactly. The login daemon is
+enabled independently of the dashboard. The original synthetic read-only probe
+alone was not evidence of private write eligibility.
 
 Unattended credential renewal beyond the connector's 90-day lifetime, automatic
 abandoned-staging/receipt cleanup and explicit source-generation replacement are
