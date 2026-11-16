@@ -35,8 +35,23 @@ Tools: `list_sessions`, `search_history`, `read_session`, `read_message`,
 
 The instruction queue is separate from mirrored messages. Stable operation IDs
 deduplicate cloud writes. Stable OpenCode message IDs reconcile local admission
-after a lost response. Changed context requires a fresh read and confirmation.
+after a lost response. Rewritten context requires a fresh read and confirmation;
+appended turns and streaming suffixes do not invalidate a queued instruction.
 Native permissions are not bypassed. Queued does not mean executed.
+
+- `read_session` defaults to recent messages. Forward and backward pages preserve
+  source order under the response budget. No newer messages means an empty page,
+  never a substituted older reply. Read truncated messages with `read_message`.
+- `search_history` returns a bounded matching passage and its Unicode character
+  offset for `read_message`. Search returns at most 30 matches; it does not yet
+  have a continuation cursor.
+- Pass `list_sessions.next_after` verbatim. A changed list rejects its old cursor
+  rather than silently skipping sessions. Start again without `after`.
+- All authenticated MCP requests already renew mobile activity at the router.
+  Status checks additionally wait for history and native-state refresh, then
+  report freshness. A missing or stale native status cannot confirm completion.
+- Revocation is rechecked after tool waits and inside queue mutations. Expired,
+  never-admitted confirmation requests no longer block later operations forever.
 
 ## Free-tier behavior
 
@@ -59,12 +74,17 @@ receipts or staging while a connector can retry them.
 ```console
 npm test
 node test/e2e/cloud-vm.mjs
+node test/e2e/tool-contracts.mjs
 ```
 
 The second command is an operator harness for the prepared Cua macOS VM. It
 requires the disposable `vm_environment.py` service, the test Agent View binary
 and the signed-in browser forwarded on port 19949. It uses synthetic sessions
 and a deterministic local model. No paid model credential is needed.
+The third command tests the deployed cloud tool contracts with a disposable,
+source-bound synthetic projection and simulated status metadata. It does not
+execute an agent or change the personal primary source. Fixture grants and rows
+are removed on exit.
 
 Verified against the deployed Worker and Neon: owner Google login, code/PKCE
 exchange, actual OpenCode history projection, tool-output canary exclusion,

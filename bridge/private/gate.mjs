@@ -24,11 +24,11 @@ export class WakeGate {
       const now=Date.now();await s.put(`active_until:${p.source}`,now+5*60_000);
       for(const wake of this.waiters)wake();
       const seen=await s.get(`last_seen:${p.source}`)??0;
-      const checkKey=`${p.kind==='runtime'?'runtime_checked':'checked'}:${p.source}`;
-      const freshFor=p.kind==='runtime'?20_000:5000;
-      if(p.wait && seen>now-60_000 && (await s.get(checkKey)??0)<now-freshFor) {
+      const checks=p.kind==='both'?[['checked',5000],['runtime_checked',20_000]]:[[p.kind==='runtime'?'runtime_checked':'checked',p.kind==='runtime'?20_000:5000]];
+      const fresh=async()=>{for(const [key,age] of checks)if((await s.get(`${key}:${p.source}`)??0)<now-age)return false;return true;};
+      if(p.wait && seen>now-60_000 && !await fresh()) {
         const deadline=Date.now()+8000;
-        while(Date.now()<deadline && (await s.get(checkKey)??0)<now-freshFor) {
+        while(Date.now()<deadline && !await fresh()) {
           await new Promise(resolve=>{let timer;const wake=()=>{clearTimeout(timer);this.waiters.delete(wake);resolve();};this.waiters.add(wake);timer=setTimeout(wake,Math.max(1,deadline-Date.now()));});
         }
       }

@@ -109,7 +109,7 @@ test('MCP exposes real read/search tools but rejects ungranted sends and bypass 
   const older=JSON.parse((await rpc('tools/call',{name:'read_session',arguments:{session_id:'ses_pages',before:latest.next_before}})).result.content[0].text);
   assert.equal(older.messages.at(-1).message_order,2000);
   const confused=JSON.parse((await rpc('tools/call',{name:'read_session',arguments:{session_id:'ses_pages',after:4980}})).result.content[0].text);
-  assert.equal(confused.no_newer_messages,true);assert.equal(confused.messages.at(-1).message_order,3000);assert.equal(confused.context.anchor_order,3000);
+  assert.equal(confused.no_newer_messages,true);assert.equal(confused.messages.length,0);assert.equal(confused.page_kind,'newer');assert.equal(confused.context.anchor_order,3000);
   const big=Array.from({length:5},(_,i)=>({id:`big_${i}`,role:'assistant',order:i+1,created_at:i,updated_at:i,text:`Message ${i} `+'x'.repeat(25_000)}));
   await store.apply(writer,{version:1,batch_id:'big-tail',session_id:'ses_big_tail',kind:'baseline',from:0,through:20,upload_id:'big-tail-gen',chunk:0,complete:true,session:state,messages:big,delete_ids:[]});
   const bigTail=JSON.parse((await rpc('tools/call',{name:'read_session',arguments:{session_id:'ses_big_tail'}})).result.content[0].text);

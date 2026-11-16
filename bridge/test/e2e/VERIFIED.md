@@ -127,3 +127,33 @@ operation no longer blocks later instructions to that session.
 The temporary personal-Mac test session was deleted through the native API and
 its normal history deletion synced. VM services, the VM and test browsing were
 stopped; only the intended production connector remains running.
+# Tool audit follow-up and second review, November 16, 2026
+
+All 42 backend tests passed. Deployed Worker version
+`d1150c68-a74f-4460-870c-51d6b49ee6a0` then passed `tool-contracts.mjs` against
+real Cloudflare/Neon with a disposable, source-bound synthetic projection:
+
+- Forward pages returned every message exactly once under the response budget.
+  An exhausted forward read returned no old replies.
+- Search returned the matching passage deep inside Unicode text. Its bounded
+  excerpt and character offset matched a subsequent `read_message` result.
+- Session-list paging detected a changed status snapshot instead of skipping rows.
+- A cloud-only instruction stayed queued, then cancelled. No native execution
+  or admission was simulated. The personal primary source was unchanged.
+
+The second code review also fixed unadmitted confirmation requests that never
+expired, missing/stale native records labelled fresh, inconsistent input/reply
+read snapshots, and access revoked while a tool waited or mutated its queue.
+Regression tests exercise the real Worker router as well as individual handlers.
+
+Correction to the first audit: the outer authenticated MCP router already renewed
+mobile activity on every request. Direct-handler tests bypassed that router, so
+the claim that receipt polling falls back to 15-minute sync was wrong. Receipt
+checks now additionally wait for both history and native-state refresh and return
+freshness metadata. This is not a fix for a nonexistent idle-sync fallback.
+
+Known scope limits remain explicit: search returns at most 30 matches without a
+continuation cursor; mobile does not expose create-session, stop-agent or native
+approval/question-answer tools. The older renewal/retention/source-replacement
+maintenance items remain tracked separately in issue #18. These tests are not a
+new ChatGPT client, iPhone Live, or native-agent execution verification.
