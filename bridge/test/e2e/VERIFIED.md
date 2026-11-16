@@ -99,5 +99,14 @@ The reconnect test also exposed stale registration handling after a VM reboot.
 The candidate connector now verifies and adopts the live replacement service.
 Backend tests: 30 passed. Agent View library tests: 948 passed, 7 ignored.
 
+The authenticated ChatGPT text client then made one latest-message read with
+`limit: 3` and no offset scanning. It sent one new instruction to a separate
+synthetic personal-Mac session, checked the actual `accepted` receipt, and read
+`MOBILE_REPAIR_NATIVE_OK_20261116` after that operation's input. It did not reuse
+the old fixture reply or claim completion from admission alone. The old personal
+daemon had no native-state snapshot, so `completion_confirmed` correctly stayed
+false even after the new reply appeared. A follow-up adds an explicit `page_kind`
+field because the client over-explained the former `no_newer_messages: false`.
+
 These are transport and native-state checks, not a new iPhone Live verification.
 The phone's original implementation operation was not resent or marked delivered.
