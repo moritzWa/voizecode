@@ -1,5 +1,6 @@
 import { digest, SyncError } from '../sync/projection.mjs';
 import { ReadContext,readContext,sameContext } from './context.mjs';
+import { requireGrant } from './grant.mjs';
 const scope=p=>[p.owner_id,p.device_id,p.database_epoch];
 const where='owner_id=$1 AND device_id=$2 AND database_epoch=$3';
 
@@ -13,6 +14,7 @@ export class Outbox {
     // Signal first: a failed DB write causes a harmless extra poll, not a stranded message.
     await this.gate.signal(`${principal.device_id}|${principal.database_epoch}`);
     const receipt=await this.db.transaction(async tx=>{
+      await requireGrant(tx,principal,{scope:'messages:send',lock:true});
       const s=scope(principal);
       const device=(await tx.query(`SELECT 1 FROM av_credentials WHERE ${where} AND audience='sync' AND revoked=false AND expires_at>$4 LIMIT 1`,[...s,Date.now()])).rows[0];
       if(!device)throw new SyncError('device_disconnected',409);
@@ -36,8 +38,9 @@ export class Outbox {
   }
   async lease(principal) {
     const message=await this.db.transaction(async tx=>{
+      await requireGrant(tx,principal,{audience:'sync',scope:'messages:deliver',lock:true});
       const s=scope(principal),now=Date.now();
-      await tx.query(`UPDATE av_outbox SET state=CASE WHEN state='queued' THEN 'expired' ELSE 'uncertain' END WHERE ${where} AND state IN ('queued','leased') AND expires_at<=$4`,[...s,now]);
+      await tx.query(`UPDATE av_outbox SET state=CASE WHEN state IN ('queued','needs_confirmation') THEN 'expired' ELSE 'uncertain' END WHERE ${where} AND state IN ('queued','leased','needs_confirmation') AND expires_at<=$4`,[...s,now]);
       const row=(await tx.query(`SELECT * FROM av_outbox q WHERE ${where} AND (state='queued' OR (state='leased' AND lease_until<$4))
         AND NOT EXISTS (SELECT 1 FROM av_outbox earlier WHERE earlier.owner_id=q.owner_id AND earlier.device_id=q.device_id AND earlier.database_epoch=q.database_epoch
         AND earlier.session_id=q.session_id AND earlier.sequence<q.sequence AND earlier.state IN ('queued','leased','needs_confirmation','uncertain'))
@@ -57,14 +60,17 @@ export class Outbox {
   }
   async ack(principal,{operation_id,message_id,status}) {
     if(!['accepted','needs_confirmation','failed'].includes(status))throw new SyncError('invalid_receipt',400);
-    const result=await this.db.query(`UPDATE av_outbox SET state=$6,receipt=$7 WHERE ${where} AND operation_id=$4 AND message_id=$5 AND state IN ('leased','needs_confirmation','uncertain','expired',$6) RETURNING *`,
-      [...scope(principal),operation_id,message_id,status,JSON.stringify({message_id,status})]);
+    const result=await this.db.transaction(async tx=>{
+      await requireGrant(tx,principal,{audience:'sync',scope:'messages:deliver',lock:true});
+      return tx.query(`UPDATE av_outbox SET state=$6,receipt=$7 WHERE ${where} AND operation_id=$4 AND message_id=$5 AND state IN ('leased','needs_confirmation','uncertain','expired',$6) RETURNING *`,
+        [...scope(principal),operation_id,message_id,status,JSON.stringify({message_id,status})]);
+    });
     if(!result.rows.length)throw new SyncError('receipt_conflict');
     await this.gate.signalReceipt(`${principal.device_id}|${principal.database_epoch}`,operation_id);
     return publicReceipt(result.rows[0]);
   }
   async status(principal,operation_id) {
-    await this.db.query(`UPDATE av_outbox SET state=CASE WHEN state='queued' THEN 'expired' ELSE 'uncertain' END WHERE ${where} AND operation_id=$4 AND state IN ('queued','leased') AND expires_at<=$5`,[...scope(principal),operation_id,Date.now()]);
+    await this.db.query(`UPDATE av_outbox SET state=CASE WHEN state IN ('queued','needs_confirmation') THEN 'expired' ELSE 'uncertain' END WHERE ${where} AND operation_id=$4 AND state IN ('queued','leased','needs_confirmation') AND expires_at<=$5`,[...scope(principal),operation_id,Date.now()]);
     const row=(await this.db.query(`SELECT * FROM av_outbox WHERE ${where} AND operation_id=$4`,[...scope(principal),operation_id])).rows[0];
     if(!row)throw new SyncError('message_not_found',404);
     const receipt=publicReceipt(row);
@@ -76,7 +82,10 @@ export class Outbox {
   }
   async cancel(principal,operation_id) {
     if(!principal.scopes?.split(' ').includes('messages:send'))throw new SyncError('write_permission_required',403);
-    const row=(await this.db.query(`UPDATE av_outbox SET state='cancelled' WHERE ${where} AND operation_id=$4 AND state IN ('queued','needs_confirmation','cancelled') RETURNING *`,[...scope(principal),operation_id])).rows[0];
+    const row=await this.db.transaction(async tx=>{
+      await requireGrant(tx,principal,{scope:'messages:send',lock:true});
+      return (await tx.query(`UPDATE av_outbox SET state='cancelled' WHERE ${where} AND operation_id=$4 AND state IN ('queued','needs_confirmation','cancelled') RETURNING *`,[...scope(principal),operation_id])).rows[0];
+    });
     if(!row)throw new SyncError('cannot_cancel_admitted_or_inflight_message',409);
     await this.gate.signal(`${principal.device_id}|${principal.database_epoch}`);
     return publicReceipt(row);

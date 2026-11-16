@@ -27,7 +27,7 @@ async function readJson(request) {
   catch { throw new SyncError('invalid_json', 400); }
 }
 
-/** Private handler only. NOT wired to worker.mjs, wrangler or the public MCP probe. */
+/** Authenticated private sync/reader routes, never part of the public MCP probe. */
 export function privateHandler(store) {
   return async request => {
     const url = new URL(request.url);
