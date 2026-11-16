@@ -59,8 +59,11 @@ finally{
  if(timer)clearInterval(timer);await refreshChain.catch(()=>{});
  for(const token of [reader,writer].filter(Boolean))await fetch(base+'/revoke',{method:'POST',body:new URLSearchParams({token}),signal:AbortSignal.timeout(30_000)}).catch(()=>{});
  if(db){
-  for(const table of ['av_staged_deletes','av_messages','av_baselines','av_receipts','av_sessions','av_outbox','av_credentials'])await db.query(`DELETE FROM ${table} WHERE owner_id=$1 AND device_id=$2 AND database_epoch=$3`,source).catch(()=>{});
-  await db.query('DELETE FROM av_pairings WHERE device_id=$1 AND database_epoch=$2',[device,epoch]).catch(()=>{});await db.close();
+  let clean=true;
+  for(const table of ['av_staged_deletes','av_messages','av_baselines','av_receipts','av_sessions','av_outbox','av_credentials'])try{await db.query(`DELETE FROM ${table} WHERE owner_id=$1 AND device_id=$2 AND database_epoch=$3`,source);}catch{clean=false;}
+  try{await db.query('DELETE FROM av_pairings WHERE device_id=$1 AND database_epoch=$2',[device,epoch]);}catch{clean=false;}
+  if(!clean){console.error('Synthetic fixture cleanup was incomplete');process.exitCode=1;}else console.log('Synthetic fixture grants and database rows removed.');
+  await db.close();
  }
 }
 process.exit(process.exitCode??0);
