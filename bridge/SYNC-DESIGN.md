@@ -1,8 +1,8 @@
 # AgentVoice: storage, diff sync and message delivery
 
-November 15, 2026. Proposed design, not deployed. Supersedes the earlier outline.
-Only the fake-data MCP probe exists. Its read-only tool is confirmed working in
-iPhone Live voice by the owner. Authenticated and mutating tools remain untested.
+Updated November 16, 2026. The private backend is deployed and the Agent View
+connector has passed the cloud/Cua round trip. Actual ChatGPT authenticated text
+reads and approved writes work. Private iPhone Live voice is still a device gate.
 
 ## Current scope update (supersedes older choices below)
 
@@ -12,19 +12,20 @@ timestamps, titles and revert visibility; do not sync tools, tool outputs, hidde
 reasoning, attachments, arbitrary metadata or raw source JSON. Session-level
 revocation can remain a security control, not a mandatory selection workflow.
 
-Local current-V2 measurement: ~38 MB visible text, ~49 MB with compact metadata,
-not the entire 29 GB database. Legacy-only/inherited fork coverage and actual PG
-index overhead still need validation. Aim for Workers Free + Neon Free, rather
-than Fly. Storage looks plausible; compute/CPU/network quotas remain test gates.
+The full Rust read-only audit projected 2,609 sessions, 72,221 visible messages
+and 38,285,538 text bytes. The largest encoded message fits the 850 KB transport
+budget. The largest real user paste also indexed locally in Postgres without
+upload. Workers Free + Neon Free are provisioned. Sustained quotas still need
+measurement after real rollout.
 Avoid history requests when no changes exist and avoid waking Postgres on idle
 message polls. Full encrypted R2 recovery is **deferred, separate from this project**.
 
-The protocol/storage first slice now exists under [sync/](sync/README.md) and is
-tested locally with synthetic fixtures. It does not yet include Google/MCP OAuth,
-the Agent View Rust daemon, deployed Neon, or remote message delivery. The public
-MCP probe is unchanged and never imports the private sync code. No real history
-was uploaded by this implementation change. Treat the older design sections as
-background/invariants, not an up-to-date rollout checklist or feature status.
+The [private backend](private/README.md) now includes Google/MCP OAuth, pairing,
+Neon, bounded history tools and a separate message queue. Agent View has a Rust
+reader/journal and login daemon. [Verification evidence](test/e2e/VERIFIED.md)
+covers the deployed synthetic tests. No personal history has been uploaded. The
+public probe remains separate. Older sections below are design background, not
+the rollout checklist. Encrypted backups and wireless wake remain separate.
 
 ## Verified against the installed V2 contract
 
@@ -39,6 +40,9 @@ background/invariants, not an up-to-date rollout checklist or feature status.
   `GET /api/experimental/session/{id}/log?after=N&follow=true`. The cursor is
   exclusive. The global `/api/event` stream is explicitly volatile, so it can
   wake a sync worker but cannot be the durable cursor.
+- Persisted sequence watermarks do not guarantee persisted event bodies. The real
+  CLI can omit them. Missing ranges reconcile the current source projection in a
+  consistent snapshot instead of silently skipping changes.
 - The running prompt endpoint accepts caller-supplied `id`, `text`, `metadata`,
   `delivery` and `resume`. It returns a durable OpenCode inbox admission.
 - V2 inbox reconciliation finds an existing ID in either pending work or delivered

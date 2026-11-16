@@ -7,7 +7,7 @@ const id = z.string().min(1).max(200);
 const counter = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 export const Message = z.object({
   id, role: z.enum(['user', 'assistant']), order: counter,
-  created_at: counter, updated_at: counter, text: z.string().max(500_000),
+  created_at: counter, updated_at: counter, text: z.string().max(1_000_000),
 }).strict();
 const Session = z.object({
   title: z.string().max(1000), archived: z.boolean(),

@@ -104,6 +104,16 @@ test('large delta chunks remain hidden and do not advance the cursor until final
   assert.deepEqual(await store.apply(writer,first),ack);
 });
 
+test('a source-visible paste larger than 500K remains intact within the HTTPS budget',async()=>{
+  const text='visible text '.repeat(57_000)+'DISTINCT_LONG_TAIL';
+  assert(text.length>500_000);
+  const body=batch('long-text',{messages:[msg('long-message',1,text)]});
+  assert(new TextEncoder().encode(JSON.stringify(body)).length<850_000);
+  await store.apply(writer,body);
+  const result=await store.read(reader,'long-text');
+  assert.equal(result.messages[0].text,text);
+});
+
 test('owner/device/DB epoch scopes cannot read another source; forks stay separate', async () => {
   await store.apply(writer, batch('fork-parent')); await store.apply(writer, batch('fork-child'));
   for (const patch of [{ owner_id: 'stranger' }, { device_id: 'other' }, { database_epoch: 'old' }]) {

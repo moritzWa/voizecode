@@ -70,7 +70,8 @@ Verified against the deployed Worker and Neon: owner Google login, code/PKCE
 exchange, actual OpenCode history projection, tool-output canary exclusion,
 remote admission and reply sync, retry deduplication, revert/unrevert, forks,
 dashboard-independent login-item delivery, offline queueing, refresh rotation and
-revocation. ChatGPT Live voice support still requires a real client check.
+revocation. Actual authenticated ChatGPT text search and approved send/reply have
+also passed. Private iPhone Live voice still requires its own device check.
 
 Backend queries can read copied text. OpenAI sees retrieved content. Logs exclude
 request bodies, SQL, credentials and URLs with codes. The source database and

@@ -94,6 +94,13 @@ test('MCP exposes real read/search tools but rejects ungranted sends and bypass 
   const forbidden=await rpc('tools/call',{name:'send_session_message',arguments:{operation_id:'op-short',session_id:'ses_fixture',text:'Do not run',base_cursor:10,confirmed:false}});
   assert(forbidden.error || forbidden.result?.isError);
   assert.equal((await app.fetch(req('/mcp'),env)).status,401);
+  const store=new SyncStore(db),writer=await store.authenticate(writerToken,'sync');
+  const unicode='😀'.repeat(25_000)+'TAIL';
+  await store.apply(writer,{version:1,batch_id:'unicode-baseline',session_id:'ses_unicode',kind:'baseline',from:0,through:1,upload_id:'unicode-gen',chunk:0,complete:true,session:state,messages:[{id:'msg_unicode',role:'assistant',order:1,created_at:1,updated_at:1,text:unicode}],delete_ids:[]});
+  const first=JSON.parse((await rpc('tools/call',{name:'read_message',arguments:{session_id:'ses_unicode',message_id:'msg_unicode'}})).result.content[0].text);
+  assert.equal(first.next_offset,20_000);
+  const next=JSON.parse((await rpc('tools/call',{name:'read_message',arguments:{session_id:'ses_unicode',message_id:'msg_unicode',offset:first.next_offset}})).result.content[0].text);
+  assert.equal(first.text+next.text,unicode);assert.equal(next.next_offset,null);
 });
 test('outbox is idempotent, source-scoped, ordered and checks stale context',async()=>{
   const store=new SyncStore(db),reader=await store.authenticate(readerToken,'read'),writer=await store.authenticate(writerToken,'sync'),outbox=new Outbox(db,gate);

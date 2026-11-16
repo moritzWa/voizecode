@@ -12,7 +12,7 @@ same-ID retry deduplication, agent reply sync, native revert/unrevert, native
 forks, dashboard-independent login-item sync, stopped-connector queueing,
 reconnect delivery, refresh rotation and immediate revocation.
 
-A separate payload fixture uploaded more than 550 KB of visible user text
+A separate payload fixture uploaded one 741,020-byte visible user message
 through the Free Worker without a request failure. This is a payload test, not a
 claim about sustained Free-tier CPU or monthly usage.
 
@@ -44,6 +44,16 @@ The policy now permits the already-allowlisted ChatGPT callback origin.
   not produce a new transcribed turn, so it is not evidence of a voice tool call.
 - Full personal history rollout, monthly quota compliance or wireless remote wake.
 - Native permission bypass. The connector does not alter permission rules.
+
+## Full local source audit, without upload
+
+The Rust source reader projected all 2,609 local sessions: 72,221 visible
+messages and 38,285,538 UTF-8 text bytes. The largest encoded message was
+761,406 bytes, within the 850 KB connector batch budget. No personal text left
+the Mac. This audit caught an overly small 500K-character message limit; the
+protocol now accepts up to one million characters, still subject to its 1 MB
+request-byte limit. The production reader and backend have a matching large-paste
+regression test. Long-message pagination also preserves Unicode character offsets.
 
 Local coverage includes inline/split text, legacy-only sessions, source cursor
 gap reconciliation, revert resolution, hidden reasoning/tool metadata, crash-safe
