@@ -83,6 +83,12 @@ if __name__=='__main__':
     elif command=='status':
         session=json.loads((ROOT/'session.json').read_text())['id'];response=api(f'/api/session/{session}/message');messages=response.get('data',response)
         print(json.dumps({'messages':len(messages) if isinstance(messages,list) else None,'types':[m.get('type') for m in messages] if isinstance(messages,list) else None}))
+    elif command=='bulk':
+        response=api('/api/session',{'title':'AgentVoice payload budget fixture','location':{'directory':str(WORK)},'model':{'providerID':'fixture','id':'echo'}})
+        session=response.get('data',response)['id']
+        for index in range(4):
+            api(f'/api/session/{session}/prompt',{'id':'msg_bulk_'+session+'_'+str(index),'text':'BULK_VISIBLE_CANARY '+('synthetic payload budget text '*6200),'delivery':'queue','resume':True})
+        print(json.dumps({'id':session,'visible_user_characters':4*(len('BULK_VISIBLE_CANARY ')+len('synthetic payload budget text ')*6200)}))
     elif command=='api':
         path=sys.argv[2];body=json.loads(sys.argv[3]) if len(sys.argv)>3 and sys.argv[3]!='null' else None
         result=api(path,body,sys.argv[4] if len(sys.argv)>4 else None);print(json.dumps(result))

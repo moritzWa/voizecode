@@ -1,0 +1,51 @@
+# Verification, November 16, 2026
+
+## Deployed cloud and macOS VM
+
+`cloud-vm.mjs` passed against the private Cloudflare Worker and Neon Free.
+The VM ran the real OpenCode V2 binary and the new Agent View connector.
+The model was a deterministic local HTTP fixture, not a paid LLM.
+
+Verified: Google owner login and consent, code/PKCE token exchange, source history
+upload, full-text search, actual tool-output canary exclusion, remote sends,
+same-ID retry deduplication, agent reply sync, native revert/unrevert, native
+forks, dashboard-independent login-item sync, stopped-connector queueing,
+reconnect delivery, refresh rotation and immediate revocation.
+
+A separate payload fixture uploaded more than 550 KB of visible user text
+through the Free Worker without a request failure. This is a payload test, not a
+claim about sustained Free-tier CPU or monthly usage.
+
+Neon's control API reported 1,077 compute seconds (about 0.30 CU-hours), 252,391
+egress bytes and a 31,768,576-byte branch logical size during this test run.
+The endpoint's `suspend_timeout_seconds: 0` means the plan default, not disabled
+autosuspend. Neon Free fixes that default at five minutes.
+
+## Actual ChatGPT text client
+
+The owner connected the private **AgentVoice** plugin through real OAuth.
+ChatGPT searched for `BRIDGE_E2E_AGENT_REPLY` and quoted a matching result.
+It then read a disposable session and requested approval for a mutating send.
+After **Allow once**, it queued `CHATGPT_SEND_PROOF_1794805408039`, observed
+`accepted`, and read the exact user input and subsequent fixture-model reply.
+
+Test conversation:
+`https://chatgpt.com/c/6afa8e75-8894-83ea-b85a-6c89fe0cedde`
+
+This check caught a browser-only issue that the same-origin integration callback
+did not: the consent page's form-action CSP blocked its redirect to ChatGPT.
+The policy now permits the already-allowlisted ChatGPT callback origin.
+
+## Not claimed
+
+- Authenticated private tools in iPhone Live voice. The older synthetic read-only
+  probe passed on the owner's actual iPhone, but it has a different tool surface.
+- Live voice audio in this VM. A fake-microphone run opened voice mode but did
+  not produce a new transcribed turn, so it is not evidence of a voice tool call.
+- Full personal history rollout, monthly quota compliance or wireless remote wake.
+- Native permission bypass. The connector does not alter permission rules.
+
+Local coverage includes inline/split text, legacy-only sessions, source cursor
+gap reconciliation, revert resolution, hidden reasoning/tool metadata, crash-safe
+batch replay, chunked deltas, rollback, stale-context sends, cancellation, expiry,
+uncertain admission and owner/device isolation.
