@@ -82,7 +82,9 @@ export async function privateMcp(request,{db,store,principal,outbox,gate}) {
       messages.push({...m,text,truncated:text.length<m.text.length});remaining-=text.length;
     }
     messages.reverse();
-    return {...result,...freshness,messages,context:view.context,no_newer_messages:view.no_newer_messages,
+    return {...result,...freshness,messages,context:view.context,
+      page_kind:view.no_newer_messages?'latest_fallback':before!==undefined?'older':after!==undefined&&after>=0?'newer':'latest',
+      ...(after!==undefined&&after>=0?{no_newer_messages:view.no_newer_messages}:{}),
       cursor_semantics:'sync revision for sending, NOT a message offset',
       next_after:messages.length?messages.at(-1).message_order:null,next_before:messages.length?messages[0].message_order:null,
       page_budget_limited:messages.length<result.messages.length,

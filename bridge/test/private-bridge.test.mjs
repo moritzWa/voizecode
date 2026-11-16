@@ -105,6 +105,7 @@ test('MCP exposes real read/search tools but rejects ungranted sends and bypass 
   await store.apply(writer,{version:1,batch_id:'pages-baseline',session_id:'ses_pages',kind:'baseline',from:0,through:5000,upload_id:'pages-gen',chunk:0,complete:true,session:state,messages:pages,delete_ids:[]});
   const latest=JSON.parse((await rpc('tools/call',{name:'read_session',arguments:{session_id:'ses_pages'}})).result.content[0].text);
   assert.equal(latest.messages[0].message_order,2100);assert.equal(latest.messages.at(-1).message_order,3000);
+  assert.equal(latest.page_kind,'latest');assert.equal(latest.no_newer_messages,undefined);
   const older=JSON.parse((await rpc('tools/call',{name:'read_session',arguments:{session_id:'ses_pages',before:latest.next_before}})).result.content[0].text);
   assert.equal(older.messages.at(-1).message_order,2000);
   const confused=JSON.parse((await rpc('tools/call',{name:'read_session',arguments:{session_id:'ses_pages',after:4980}})).result.content[0].text);
